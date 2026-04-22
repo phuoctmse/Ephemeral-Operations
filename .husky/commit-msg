@@ -1,0 +1,14 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+commit_msg_file="$1"
+commit_msg="$(cat "$commit_msg_file")"
+
+pattern='^(feat|fix|docs|ci|chore|test|perf|refactor|build|style|revert)(\([a-z0-9._/-]+\))?(!)?: .+'
+
+if ! printf '%s' "$commit_msg" | grep -Eq "$pattern"; then
+  echo "✖ Commit message must follow Conventional Commits."
+  echo "  Expected: <type>(<scope>): <description>"
+  echo "  Example: feat(auth): add JWT middleware"
+  exit 1
+fi
