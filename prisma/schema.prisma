@@ -1,0 +1,37 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum EnvStatus {
+  CREATING
+  RUNNING
+  DESTROYED
+  FAILED
+}
+
+model SandboxEnv {
+  id           String      @id @default(uuid())
+  prompt       String
+  resourceId   String?     @unique
+  instanceType String
+  status       EnvStatus   @default(CREATING)
+  hourlyCost   Float       @default(0.0)
+  costIncurred Float       @default(0.0)
+  createdAt    DateTime    @default(now())
+  expiresAt    DateTime
+  logs         ActionLog[]
+}
+
+model ActionLog {
+  id             String     @id @default(uuid())
+  envId          String
+  sandboxEnv     SandboxEnv @relation(fields: [envId], references: [id])
+  agentReasoning String     @db.Text
+  toolCalled     String
+  output         String     @db.Text
+  timestamp      DateTime   @default(now())
+}
