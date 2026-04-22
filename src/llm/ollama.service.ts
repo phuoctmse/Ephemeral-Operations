@@ -1,7 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AgentDecisionSchema, type AgentDecision } from '../common/schemas/agent-decision.schema';
-import { PRICING_TABLE, type AllowedInstanceType } from '../common/constants/finops.constants';
+import {
+  AgentDecisionSchema,
+  type AgentDecision,
+} from '../common/schemas/agent-decision.schema';
+import {
+  PRICING_TABLE,
+  type AllowedInstanceType,
+} from '../common/constants/finops.constants';
 
 const SYSTEM_PROMPT = `You are a FinOps Infrastructure Agent. Your mission is to analyze test environment requests and provision infrastructure at the lowest possible cost. You must NEVER provision resources outside the free tier or low-cost categories (t3.micro, t4g.nano). If a request exceeds capabilities, you must REJECT it and explain why.
 
@@ -32,7 +38,10 @@ export class OllamaService {
   private readonly model: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.baseUrl = this.configService.get<string>('app.ollamaBaseUrl', 'http://localhost:11434');
+    this.baseUrl = this.configService.get<string>(
+      'app.ollamaBaseUrl',
+      'http://localhost:11434',
+    );
     this.model = this.configService.get<string>('app.ollamaModel', 'llama3.2');
   }
 
@@ -68,10 +77,12 @@ Analyze this request. Should we APPROVE or REJECT? Respond with JSON.`;
       });
 
       if (!response.ok) {
-        throw new Error(`Ollama API returned ${response.status}: ${await response.text()}`);
+        throw new Error(
+          `Ollama API returned ${response.status}: ${await response.text()}`,
+        );
       }
 
-      const data = await response.json() as { message: { content: string } };
+      const data = (await response.json()) as { message: { content: string } };
       const content = data.message?.content ?? '';
 
       this.logger.debug(`Ollama raw response: ${content}`);
@@ -89,13 +100,14 @@ Analyze this request. Should we APPROVE or REJECT? Respond with JSON.`;
 
       return AgentDecisionSchema.parse(parsed);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown LLM error';
+      const message =
+        error instanceof Error ? error.message : 'Unknown LLM error';
       this.logger.error(`LLM analysis failed: ${message}`);
 
-      // Fallback: auto-approve with safe defaults
+      // Fallback: fail closed to avoid unintended provisioning when LLM is unavailable
       return {
-        decision: 'APPROVE',
-        reasoning: `LLM unavailable, auto-approved with safe defaults. Original error: ${message}`,
+        decision: 'REJECT',
+        reasoning: `LLM unavailable, request rejected for safety. Original error: ${message}`,
         config: {
           instanceType,
           ttlHours: Math.min(ttlHours, 2),
