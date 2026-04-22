@@ -1,0 +1,50 @@
+# .dockerignore for NestJS + Prisma Application
+# EphOps
+
+# Version control
+.git/
+.github/
+.gitignore
+
+# Dependencies (installed in container)
+node_modules/
+
+# Build outputs (built in container)
+dist/
+
+# Environment files (injected at runtime)
+.env
+.env.*
+!.env.example
+
+# Development files
+.vscode/
+.idea/
+*.log
+coverage/
+.eslintcache
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!.github/
+
+# Deployment configs (not needed in image)
+docker-compose.yml
+compose.yml
+Dockerfile
+.dockerignore
+
+# Prisma local data
+data/
+
+# Husky hooks (CI-only, not needed in image)
+.husky/
+
+# Test files (optional - remove if tests run in container)
+test/
+*.spec.ts
+*.e2e-spec.ts

@@ -21,3 +21,26 @@ services:
       POSTGRES_DB: ephops
     volumes:
       - ./data/postgresql:/var/lib/postgresql
+
+  ephops-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: ephops-backend
+    restart: unless-stopped
+    depends_on:
+      - postgresql
+      - floci
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/ephops
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT: http://floci:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: qwen3.5
