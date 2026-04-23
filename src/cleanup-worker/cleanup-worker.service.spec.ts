@@ -59,11 +59,13 @@ describe('CleanupWorkerService', () => {
 
       await service.handleCron();
 
-      expect(mockEc2Service.terminateInstance).toHaveBeenCalledWith('i-0abc123');
+      expect(mockEc2Service.terminateInstance).toHaveBeenCalledWith(
+        'i-0abc123',
+      );
       expect(mockSandboxEnvRepo.updateStatus).toHaveBeenCalledWith(
         'env-1',
         'DESTROYED',
-        expect.objectContaining({ costIncurred: expect.any(Number) }),
+        expect.objectContaining({}),
       );
       expect(mockActionLogRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({

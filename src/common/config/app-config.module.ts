@@ -21,7 +21,10 @@ import appConfig from '../config/app.config';
           level: isDev ? 'debug' : 'info',
         };
         if (isDev) {
-          pinoHttp.transport = { target: 'pino-pretty', options: { colorize: true } };
+          pinoHttp.transport = {
+            target: 'pino-pretty',
+            options: { colorize: true },
+          };
         }
         return { pinoHttp };
       },

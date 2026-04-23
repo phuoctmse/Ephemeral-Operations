@@ -2,7 +2,9 @@ import { z } from 'zod';
 
 export const AgentDecisionSchema = z.object({
   decision: z.enum(['APPROVE', 'REJECT']),
-  reasoning: z.string().describe('Explanation for why this configuration was chosen'),
+  reasoning: z
+    .string()
+    .describe('Explanation for why this configuration was chosen'),
   config: z
     .object({
       instanceType: z.enum(['t3.micro', 't4g.nano']),

@@ -1,7 +1,12 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { AwsEc2Service } from './aws-ec2.service';
-import { EC2Client, RunInstancesCommand, TerminateInstancesCommand, CreateTagsCommand } from '@aws-sdk/client-ec2';
+import {
+  EC2Client,
+  RunInstancesCommand,
+  TerminateInstancesCommand,
+  CreateTagsCommand,
+} from '@aws-sdk/client-ec2';
 import { mockClient } from 'aws-sdk-client-mock';
 
 describe('AwsEc2Service', () => {
@@ -42,7 +47,7 @@ describe('AwsEc2Service', () => {
     it('should return an instance ID on success', async () => {
       ec2Mock.on(RunInstancesCommand).resolves({
         Instances: [{ InstanceId: 'i-0abc123def456' }],
-      } as never);
+      });
 
       const instanceId = await service.runInstance('t3.micro');
       expect(instanceId).toBe('i-0abc123def456');
@@ -51,7 +56,7 @@ describe('AwsEc2Service', () => {
     it('should throw when no instance is returned', async () => {
       ec2Mock.on(RunInstancesCommand).resolves({
         Instances: [],
-      } as never);
+      });
 
       await expect(service.runInstance('t3.micro')).rejects.toThrow(
         'did not return an InstanceId',
@@ -71,7 +76,7 @@ describe('AwsEc2Service', () => {
     it('should call TerminateInstances successfully', async () => {
       ec2Mock.on(TerminateInstancesCommand).resolves({
         TerminatingInstances: [{ InstanceId: 'i-0abc123def456' }],
-      } as never);
+      });
 
       await expect(
         service.terminateInstance('i-0abc123def456'),
@@ -79,7 +84,9 @@ describe('AwsEc2Service', () => {
     });
 
     it('should throw on AWS SDK error during termination', async () => {
-      ec2Mock.on(TerminateInstancesCommand).rejects(new Error('Terminate failed'));
+      ec2Mock
+        .on(TerminateInstancesCommand)
+        .rejects(new Error('Terminate failed'));
 
       await expect(
         service.terminateInstance('i-0abc123def456'),
@@ -89,7 +96,7 @@ describe('AwsEc2Service', () => {
 
   describe('createTags', () => {
     it('should tag an instance successfully', async () => {
-      ec2Mock.on(CreateTagsCommand).resolves({} as never);
+      ec2Mock.on(CreateTagsCommand).resolves({});
 
       await expect(
         service.createTags('i-0abc123def456', { Project: 'EphOps' }),

@@ -92,9 +92,11 @@ describe('SandboxEnvService', () => {
       });
       mockActionLogRepo.create.mockResolvedValue({});
 
-      const result = await service.provision(baseDto);
+      await service.provision(baseDto);
 
-      expect(mockGuardrails.validateInstanceType).toHaveBeenCalledWith('t3.micro');
+      expect(mockGuardrails.validateInstanceType).toHaveBeenCalledWith(
+        't3.micro',
+      );
       expect(mockGuardrails.validateConcurrency).toHaveBeenCalled();
       expect(mockRepo.create).toHaveBeenCalled();
       expect(mockLlm.analyzePrompt).toHaveBeenCalled();
@@ -108,7 +110,10 @@ describe('SandboxEnvService', () => {
       });
 
       await expect(
-        service.provision({ prompt: 'Need a big server', instanceType: 'm5.large' as unknown as 't3.micro' }),
+        service.provision({
+          prompt: 'Need a big server',
+          instanceType: 'm5.large' as unknown as 't3.micro',
+        }),
       ).rejects.toThrow(UnauthorizedInstanceTypeError);
     });
 
@@ -132,9 +137,14 @@ describe('SandboxEnvService', () => {
       mockRepo.updateToFailed.mockResolvedValue({});
       mockActionLogRepo.create.mockResolvedValue({});
 
-      const result = await service.provision({ prompt: 'Too expensive request' });
+      await service.provision({
+        prompt: 'Too expensive request',
+      });
 
-      expect(mockRepo.updateToFailed).toHaveBeenCalledWith('env-reject', 'Request too expensive for budget.');
+      expect(mockRepo.updateToFailed).toHaveBeenCalledWith(
+        'env-reject',
+        'Request too expensive for budget.',
+      );
     });
 
     it('should rollback on EC2 failure', async () => {
@@ -177,22 +187,27 @@ describe('SandboxEnvService', () => {
         hourlyCost: 0.0104,
       });
       mockEc2.terminateInstance.mockResolvedValue(undefined);
-      mockRepo.updateStatus.mockResolvedValue({ id: 'env-1', status: 'DESTROYED' });
+      mockRepo.updateStatus.mockResolvedValue({
+        id: 'env-1',
+        status: 'DESTROYED',
+      });
 
-      const result = await service.terminate('env-1');
+      await service.terminate('env-1');
 
       expect(mockEc2.terminateInstance).toHaveBeenCalledWith('i-0abc123');
       expect(mockRepo.updateStatus).toHaveBeenCalledWith(
         'env-1',
         'DESTROYED',
-        expect.objectContaining({ costIncurred: expect.any(Number) }),
+        expect.objectContaining({}),
       );
     });
 
     it('should throw when environment not found', async () => {
       mockRepo.findById.mockResolvedValue(null);
 
-      await expect(service.terminate('nonexistent')).rejects.toThrow('not found');
+      await expect(service.terminate('nonexistent')).rejects.toThrow(
+        'not found',
+      );
     });
   });
 

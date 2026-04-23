@@ -74,7 +74,7 @@ export class SandboxEnvService {
       });
 
       // Update to RUNNING
-      const updated = await this.repo.updateStatus(env.id, 'RUNNING' as never, {
+      const updated = await this.repo.updateStatus(env.id, 'RUNNING', {
         resourceId: instanceId,
       });
 
@@ -131,6 +131,6 @@ export class SandboxEnvService {
       (Date.now() - env.createdAt.getTime()) / (1000 * 60 * 60);
     const costIncurred = Number((hoursElapsed * env.hourlyCost).toFixed(6));
 
-    return this.repo.updateStatus(id, 'DESTROYED' as never, { costIncurred });
+    return this.repo.updateStatus(id, 'DESTROYED', { costIncurred });
   }
 }

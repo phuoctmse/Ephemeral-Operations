@@ -6,6 +6,7 @@ import request from 'supertest';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication;
+  let httpServer: Parameters<typeof request>[0];
 
   beforeAll(async () => {
     const moduleFixture = await Test.createTestingModule({
@@ -21,6 +22,7 @@ describe('AppController (e2e)', () => {
       }),
     );
     await app.init();
+    httpServer = app.getHttpServer() as Parameters<typeof request>[0];
   });
 
   afterAll(async () => {
@@ -29,29 +31,27 @@ describe('AppController (e2e)', () => {
 
   describe('GET /sandbox', () => {
     it('should return 200', () => {
-      return request(app.getHttpServer())
-        .get('/sandbox')
-        .expect(200);
+      return request(httpServer).get('/sandbox').expect(200);
     });
   });
 
   describe('POST /sandbox', () => {
     it('should reject invalid instance type', () => {
-      return request(app.getHttpServer())
+      return request(httpServer)
         .post('/sandbox')
         .send({ prompt: 'Test', instanceType: 'm5.large' })
         .expect(400);
     });
 
     it('should reject missing prompt', () => {
-      return request(app.getHttpServer())
+      return request(httpServer)
         .post('/sandbox')
         .send({ instanceType: 't3.micro' })
         .expect(400);
     });
 
     it('should reject TTL above max', () => {
-      return request(app.getHttpServer())
+      return request(httpServer)
         .post('/sandbox')
         .send({ prompt: 'Test', ttlHours: 10 })
         .expect(400);
@@ -60,9 +60,7 @@ describe('AppController (e2e)', () => {
 
   describe('GET /action-logs', () => {
     it('should return 200', () => {
-      return request(app.getHttpServer())
-        .get('/action-logs')
-        .expect(200);
+      return request(httpServer).get('/action-logs').expect(200);
     });
   });
 });
