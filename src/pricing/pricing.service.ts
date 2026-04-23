@@ -83,6 +83,12 @@ export class PricingService {
         if (hourlyCost === null) {
           continue;
         }
+        if (!Number.isFinite(hourlyCost)) {
+          this.logger.warn(
+            `Skipping non-finite pricing for ${instanceType} in ${region}: ${hourlyCost}`,
+          );
+          continue;
+        }
 
         await this.prisma.pricingCache.upsert({
           where: {
@@ -251,7 +257,16 @@ export class PricingService {
       return null;
     }
 
-    return parseFloat(priceDimension.pricePerUnit.USD);
+    const usdString = priceDimension.pricePerUnit.USD;
+    const cost = Number.parseFloat(usdString);
+    if (!Number.isFinite(cost)) {
+      this.logger.warn(
+        `Invalid USD pricing value for ${instanceType} in ${location}: ${usdString}`,
+      );
+      return null;
+    }
+
+    return cost;
   }
 
   private isAwsPriceItem(value: unknown): value is AwsPriceItem {
@@ -268,6 +283,29 @@ export class PricingService {
       !candidate.terms?.OnDemand ||
       typeof candidate.terms.OnDemand !== 'object'
     ) {
+      return false;
+    }
+
+    const onDemandTerms = Object.values(candidate.terms.OnDemand);
+    if (onDemandTerms.length === 0) {
+      return false;
+    }
+
+    const firstTerm = onDemandTerms[0];
+    if (
+      !firstTerm?.priceDimensions ||
+      typeof firstTerm.priceDimensions !== 'object'
+    ) {
+      return false;
+    }
+
+    const priceDimensions = Object.values(firstTerm.priceDimensions);
+    if (priceDimensions.length === 0) {
+      return false;
+    }
+
+    const firstDimension = priceDimensions[0];
+    if (typeof firstDimension?.pricePerUnit?.USD !== 'string') {
       return false;
     }
 
