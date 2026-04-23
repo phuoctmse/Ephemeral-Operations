@@ -32,8 +32,17 @@ async function bootstrap(): Promise<void> {
       'API for provisioning, managing, and auto-destroying ephemeral cloud environments with AI-driven cost optimization.',
     )
     .setVersion('1.0')
+    .addApiKey(
+      {
+        type: 'apiKey',
+        in: 'header',
+        name: 'X-API-KEY',
+      },
+      'api-key',
+    )
     .addTag('Sandbox Environments')
     .addTag('Action Logs')
+    .addTag('Pricing')
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
@@ -47,4 +56,7 @@ async function bootstrap(): Promise<void> {
   console.log(`Swagger docs available at http://localhost:${port}/api/docs`);
 }
 
-bootstrap();
+void bootstrap().catch((error: unknown) => {
+  console.error('Failed to bootstrap application', error);
+  process.exit(1);
+});
