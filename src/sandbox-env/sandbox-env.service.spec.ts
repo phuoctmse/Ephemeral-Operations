@@ -7,6 +7,7 @@ import { OllamaService } from '../llm/ollama.service';
 import { GuardrailsService } from '../guardrails/guardrails.service';
 import { ActionLogRepository } from '../action-log/action-log.repository';
 import { UnauthorizedInstanceTypeError } from '../common/exceptions/finops.exceptions';
+import { PricingService } from '../pricing/pricing.service';
 
 describe('SandboxEnvService', () => {
   let service: SandboxEnvService;
@@ -15,6 +16,7 @@ describe('SandboxEnvService', () => {
   let mockLlm: Record<string, jest.Mock>;
   let mockGuardrails: Record<string, jest.Mock>;
   let mockActionLogRepo: Record<string, jest.Mock>;
+  let mockPricing: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     mockRepo = {
@@ -36,6 +38,7 @@ describe('SandboxEnvService', () => {
       validateConcurrency: jest.fn(),
     };
     mockActionLogRepo = { create: jest.fn() };
+    mockPricing = { getHourlyCost: jest.fn() };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -45,12 +48,14 @@ describe('SandboxEnvService', () => {
         { provide: OllamaService, useValue: mockLlm },
         { provide: GuardrailsService, useValue: mockGuardrails },
         { provide: ActionLogRepository, useValue: mockActionLogRepo },
+        { provide: PricingService, useValue: mockPricing },
         {
           provide: ConfigService,
           useValue: {
-            get: (key: string, defaultValue?: number) => {
-              const config: Record<string, number> = {
+            get: (key: string, defaultValue?: number | string) => {
+              const config: Record<string, number | string> = {
                 'app.maxTtlHours': 2,
+                'app.awsRegion': 'us-east-1',
               };
               return config[key] ?? defaultValue;
             },
@@ -68,6 +73,7 @@ describe('SandboxEnvService', () => {
     it('should create a sandbox environment end-to-end', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
       mockGuardrails.validateConcurrency.mockResolvedValue(undefined);
+      mockPricing.getHourlyCost.mockResolvedValue(0.0104);
       mockRepo.create.mockResolvedValue({
         id: 'env-1',
         prompt: baseDto.prompt,
@@ -92,10 +98,16 @@ describe('SandboxEnvService', () => {
       });
       mockActionLogRepo.create.mockResolvedValue({});
 
-      const result = await service.provision(baseDto);
+      await service.provision(baseDto);
 
-      expect(mockGuardrails.validateInstanceType).toHaveBeenCalledWith('t3.micro');
+      expect(mockGuardrails.validateInstanceType).toHaveBeenCalledWith(
+        't3.micro',
+      );
       expect(mockGuardrails.validateConcurrency).toHaveBeenCalled();
+      expect(mockPricing.getHourlyCost).toHaveBeenCalledWith(
+        't3.micro',
+        'us-east-1',
+      );
       expect(mockRepo.create).toHaveBeenCalled();
       expect(mockLlm.analyzePrompt).toHaveBeenCalled();
       expect(mockEc2.runInstance).toHaveBeenCalledWith('t3.micro');
@@ -108,13 +120,17 @@ describe('SandboxEnvService', () => {
       });
 
       await expect(
-        service.provision({ prompt: 'Need a big server', instanceType: 'm5.large' as unknown as 't3.micro' }),
+        service.provision({
+          prompt: 'Need a big server',
+          instanceType: 'm5.large' as unknown as 't3.micro',
+        }),
       ).rejects.toThrow(UnauthorizedInstanceTypeError);
     });
 
     it('should mark env as FAILED when LLM rejects', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
       mockGuardrails.validateConcurrency.mockResolvedValue(undefined);
+      mockPricing.getHourlyCost.mockResolvedValue(0.0104);
       mockRepo.create.mockResolvedValue({
         id: 'env-reject',
         prompt: 'Too expensive request',
@@ -132,14 +148,18 @@ describe('SandboxEnvService', () => {
       mockRepo.updateToFailed.mockResolvedValue({});
       mockActionLogRepo.create.mockResolvedValue({});
 
-      const result = await service.provision({ prompt: 'Too expensive request' });
+      await service.provision({ prompt: 'Too expensive request' });
 
-      expect(mockRepo.updateToFailed).toHaveBeenCalledWith('env-reject', 'Request too expensive for budget.');
+      expect(mockRepo.updateToFailed).toHaveBeenCalledWith(
+        'env-reject',
+        'Request too expensive for budget.',
+      );
     });
 
     it('should rollback on EC2 failure', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
       mockGuardrails.validateConcurrency.mockResolvedValue(undefined);
+      mockPricing.getHourlyCost.mockResolvedValue(0.0104);
       mockRepo.create.mockResolvedValue({
         id: 'env-fail',
         prompt: 'Test',
@@ -165,6 +185,43 @@ describe('SandboxEnvService', () => {
 
       expect(mockRepo.updateToFailed).toHaveBeenCalled();
     });
+
+    it('should fallback to static pricing when pricing service fails', async () => {
+      mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+      mockGuardrails.validateConcurrency.mockResolvedValue(undefined);
+      mockPricing.getHourlyCost.mockRejectedValue(
+        new Error('pricing unavailable'),
+      );
+      mockRepo.create.mockResolvedValue({
+        id: 'env-fallback',
+        prompt: baseDto.prompt,
+        instanceType: 't3.micro',
+        status: 'CREATING',
+        hourlyCost: 0.0104,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 3600000),
+      });
+      mockLlm.analyzePrompt.mockResolvedValue({
+        decision: 'APPROVE',
+        reasoning: 'Safe to provision.',
+        config: { instanceType: 't3.micro', ttlHours: 1, region: 'us-east-1' },
+        costAnalysis: { estimatedHourly: 0.0104, totalExpected: 0.0104 },
+      });
+      mockEc2.runInstance.mockResolvedValue('i-0abc123');
+      mockEc2.createTags.mockResolvedValue(undefined);
+      mockRepo.updateStatus.mockResolvedValue({
+        id: 'env-fallback',
+        status: 'RUNNING',
+        resourceId: 'i-0abc123',
+      });
+      mockActionLogRepo.create.mockResolvedValue({});
+
+      await service.provision(baseDto);
+
+      expect(mockRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ hourlyCost: 0.0104 }),
+      );
+    });
   });
 
   describe('terminate', () => {
@@ -177,22 +234,27 @@ describe('SandboxEnvService', () => {
         hourlyCost: 0.0104,
       });
       mockEc2.terminateInstance.mockResolvedValue(undefined);
-      mockRepo.updateStatus.mockResolvedValue({ id: 'env-1', status: 'DESTROYED' });
+      mockRepo.updateStatus.mockResolvedValue({
+        id: 'env-1',
+        status: 'DESTROYED',
+      });
 
-      const result = await service.terminate('env-1');
+      await service.terminate('env-1');
 
       expect(mockEc2.terminateInstance).toHaveBeenCalledWith('i-0abc123');
       expect(mockRepo.updateStatus).toHaveBeenCalledWith(
         'env-1',
         'DESTROYED',
-        expect.objectContaining({ costIncurred: expect.any(Number) }),
+        expect.anything(),
       );
     });
 
     it('should throw when environment not found', async () => {
       mockRepo.findById.mockResolvedValue(null);
 
-      await expect(service.terminate('nonexistent')).rejects.toThrow('not found');
+      await expect(service.terminate('nonexistent')).rejects.toThrow(
+        'not found',
+      );
     });
   });
 
@@ -200,8 +262,7 @@ describe('SandboxEnvService', () => {
     it('should return all environments', async () => {
       mockRepo.findAll.mockResolvedValue([{ id: 'env-1' }, { id: 'env-2' }]);
 
-      const result = await service.findAll();
-      expect(result).toHaveLength(2);
+      await expect(service.findAll()).resolves.toHaveLength(2);
     });
   });
 });

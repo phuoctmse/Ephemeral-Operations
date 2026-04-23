@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { OllamaService } from './ollama.service';
+import { PricingService } from '../pricing/pricing.service';
 import {
   afterEach,
   beforeEach,
@@ -13,7 +14,6 @@ import {
 describe('OllamaService', () => {
   let service: OllamaService;
   let mockFetch: jest.MockedFunction<typeof fetch>;
-
   beforeEach(async () => {
     mockFetch = jest.fn();
     global.fetch = mockFetch;
@@ -28,9 +28,21 @@ describe('OllamaService', () => {
               const config: Record<string, string> = {
                 'app.ollamaBaseUrl': 'http://localhost:11434',
                 'app.ollamaModel': 'llama3.2',
+                'app.awsRegion': 'us-east-1',
               };
               return config[key] ?? defaultValue;
             },
+          },
+        },
+        {
+          provide: PricingService,
+          useValue: {
+            getHourlyCost: jest.fn(() => Promise.resolve(0.0104)),
+            getPricingTableForPrompt: jest.fn(() =>
+              Promise.resolve(
+                '- t3.micro: $0.0104/hour\n- t4g.nano: $0.0042/hour',
+              ),
+            ),
           },
         },
       ],
@@ -84,7 +96,7 @@ describe('OllamaService', () => {
       expect(result.costAnalysis?.estimatedHourly).toBe(0.0104);
     });
 
-    it('should fallback to auto-approve when Ollama is unavailable', async () => {
+    it('should fallback to REJECT when Ollama is unavailable', async () => {
       mockFetch.mockRejectedValue(new Error('Connection refused'));
 
       const result = await service.analyzePrompt(
@@ -93,7 +105,7 @@ describe('OllamaService', () => {
         1,
       );
 
-      expect(result.decision).toBe('APPROVE');
+      expect(result.decision).toBe('REJECT');
       expect(result.reasoning).toContain('LLM unavailable');
       expect(result.config?.instanceType).toBe('t3.micro');
     });
@@ -112,7 +124,7 @@ describe('OllamaService', () => {
         0.5,
       );
 
-      expect(result.decision).toBe('APPROVE');
+      expect(result.decision).toBe('REJECT');
       expect(result.reasoning).toContain('LLM unavailable');
     });
 
@@ -133,7 +145,7 @@ describe('OllamaService', () => {
       const result = await service.analyzePrompt('test', 't3.micro', 1);
 
       // Should fallback because Zod validation will fail
-      expect(result.decision).toBe('APPROVE');
+      expect(result.decision).toBe('REJECT');
       expect(result.reasoning).toContain('LLM unavailable');
     });
   });

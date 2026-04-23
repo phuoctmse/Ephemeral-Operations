@@ -8,13 +8,17 @@ import {
   PRICING_TABLE,
   type AllowedInstanceType,
 } from '../common/constants/finops.constants';
+import { PricingService } from '../pricing/pricing.service';
 
-const SYSTEM_PROMPT = `You are a FinOps Infrastructure Agent. Your mission is to analyze test environment requests and provision infrastructure at the lowest possible cost. You must NEVER provision resources outside the free tier or low-cost categories (t3.micro, t4g.nano). If a request exceeds capabilities, you must REJECT it and explain why.
+const BASE_SYSTEM_PROMPT = `You are a FinOps Infrastructure Agent. Your mission is to analyze test environment requests and provision infrastructure at the lowest possible cost. You must NEVER provision resources outside the free tier or low-cost categories (t3.micro, t4g.nano). If a request exceeds capabilities, you must REJECT it and explain why.
 
 Available tools:
 - get_pricing_estimate: Look up estimated cost for an instance type.
 - provision_resources: Request the backend to create a server via AWS SDK.
 - log_reasoning: Save your logical analysis to the database before taking action.
+
+Current on-demand EC2 pricing (USD/hour):
+{{PRICING_TABLE}}
 
 You must respond with a JSON object matching this exact schema:
 {
@@ -36,13 +40,18 @@ export class OllamaService {
   private readonly logger = new Logger(OllamaService.name);
   private readonly baseUrl: string;
   private readonly model: string;
+  private readonly region: string;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly pricingService: PricingService,
+  ) {
     this.baseUrl = this.configService.get<string>(
       'app.ollamaBaseUrl',
       'http://localhost:11434',
     );
     this.model = this.configService.get<string>('app.ollamaModel', 'llama3.2');
+    this.region = this.configService.get<string>('app.awsRegion', 'us-east-1');
   }
 
   async analyzePrompt(
@@ -50,8 +59,30 @@ export class OllamaService {
     instanceType: AllowedInstanceType,
     ttlHours: number,
   ): Promise<AgentDecision> {
-    const hourlyCost = PRICING_TABLE[instanceType] ?? 0;
+    // Fetch live pricing; fallback to hardcoded table if service fails
+    let hourlyCost: number;
+    try {
+      hourlyCost = await this.pricingService.getHourlyCost(
+        instanceType,
+        this.region,
+      );
+    } catch {
+      hourlyCost = PRICING_TABLE[instanceType] ?? 0;
+    }
     const totalExpected = hourlyCost * ttlHours;
+
+    const pricingContext = await this.pricingService
+      .getPricingTableForPrompt(this.region)
+      .catch(() =>
+        Object.entries(PRICING_TABLE)
+          .map(([type, cost]) => `- ${type}: $${cost.toFixed(4)}/hour`)
+          .join('\n'),
+      );
+
+    const systemPrompt = BASE_SYSTEM_PROMPT.replace(
+      '{{PRICING_TABLE}}',
+      pricingContext,
+    );
 
     const userMessage = `User request: "${prompt}"
 Suggested config: instanceType=${instanceType}, ttlHours=${ttlHours}
@@ -68,7 +99,7 @@ Analyze this request. Should we APPROVE or REJECT? Respond with JSON.`;
         body: JSON.stringify({
           model: this.model,
           messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage },
           ],
           format: 'json',
@@ -111,7 +142,7 @@ Analyze this request. Should we APPROVE or REJECT? Respond with JSON.`;
         config: {
           instanceType,
           ttlHours: Math.min(ttlHours, 2),
-          region: 'us-east-1',
+          region: this.region,
         },
         costAnalysis: {
           estimatedHourly: hourlyCost,
