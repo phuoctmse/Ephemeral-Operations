@@ -17,12 +17,19 @@ export class GuardrailsService {
     private readonly configService: ConfigService,
     private readonly sandboxEnvRepo: SandboxEnvRepository,
   ) {
-    this.maxConcurrentEnvs = this.configService.get<number>('app.maxConcurrentEnvs', 2);
+    this.maxConcurrentEnvs = this.configService.get<number>(
+      'app.maxConcurrentEnvs',
+      2,
+    );
     this.maxTtlHours = this.configService.get<number>('app.maxTtlHours', 2);
   }
 
   validateInstanceType(instanceType: string): void {
-    if (!ALLOWED_INSTANCE_TYPES.includes(instanceType as typeof ALLOWED_INSTANCE_TYPES[number])) {
+    if (
+      !ALLOWED_INSTANCE_TYPES.includes(
+        instanceType as (typeof ALLOWED_INSTANCE_TYPES)[number],
+      )
+    ) {
       throw new UnauthorizedInstanceTypeError(instanceType);
     }
   }

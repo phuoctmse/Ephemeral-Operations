@@ -44,13 +44,21 @@ export class SandboxEnvRepository {
     });
   }
 
-  async updateStatus(id: string, status: EnvStatus, extra?: { resourceId?: string; costIncurred?: number }) {
+  async updateStatus(
+    id: string,
+    status: EnvStatus,
+    extra?: { resourceId?: string; costIncurred?: number },
+  ) {
     return this.prisma.sandboxEnv.update({
       where: { id },
       data: {
         status,
-        ...(extra?.resourceId !== undefined && { resourceId: extra.resourceId }),
-        ...(extra?.costIncurred !== undefined && { costIncurred: extra.costIncurred }),
+        ...(extra?.resourceId !== undefined && {
+          resourceId: extra.resourceId,
+        }),
+        ...(extra?.costIncurred !== undefined && {
+          costIncurred: extra.costIncurred,
+        }),
       },
     });
   }

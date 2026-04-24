@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { SandboxEnvRepository } from '../sandbox-env/sandbox-env.repository';
 import { AwsEc2Service } from '../aws-ec2/aws-ec2.service';
@@ -34,7 +39,9 @@ export class CleanupWorkerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      this.logger.warn(`Found ${expiredEnvs.length} expired environment(s) to clean up.`);
+      this.logger.warn(
+        `Found ${expiredEnvs.length} expired environment(s) to clean up.`,
+      );
 
       for (const env of expiredEnvs) {
         try {
@@ -46,10 +53,12 @@ export class CleanupWorkerService implements OnModuleInit, OnModuleDestroy {
           // Calculate cost incurred
           const hoursElapsed =
             (Date.now() - env.createdAt.getTime()) / (1000 * 60 * 60);
-          const costIncurred = Number((hoursElapsed * env.hourlyCost).toFixed(6));
+          const costIncurred = Number(
+            (hoursElapsed * env.hourlyCost).toFixed(6),
+          );
 
           // Update DB status
-          await this.sandboxEnvRepo.updateStatus(env.id, 'DESTROYED' as never, {
+          await this.sandboxEnvRepo.updateStatus(env.id, 'DESTROYED', {
             costIncurred,
           });
 
@@ -61,7 +70,9 @@ export class CleanupWorkerService implements OnModuleInit, OnModuleDestroy {
             output: `Terminated ${env.resourceId}, cost incurred: $${costIncurred}`,
           });
 
-          this.logger.log(`Cleaned up environment ${env.id} (${env.resourceId})`);
+          this.logger.log(
+            `Cleaned up environment ${env.id} (${env.resourceId})`,
+          );
         } catch (error) {
           this.logger.error(
             `Failed to clean up environment ${env.id}: ${error instanceof Error ? error.message : 'Unknown'}`,

@@ -8,7 +8,7 @@ describe('CleanupWorkerService', () => {
   let service: CleanupWorkerService;
   let mockSandboxEnvRepo: {
     findExpiredRunning: jest.Mock;
-    updateStatus: jest.Mock;
+    updateStatus: jest.MockedFunction<SandboxEnvRepository['updateStatus']>;
   };
   let mockEc2Service: { terminateInstance: jest.Mock };
   let mockActionLogRepo: { create: jest.Mock };
@@ -54,17 +54,43 @@ describe('CleanupWorkerService', () => {
 
       mockSandboxEnvRepo.findExpiredRunning.mockResolvedValue([expiredEnv]);
       mockEc2Service.terminateInstance.mockResolvedValue(undefined);
-      mockSandboxEnvRepo.updateStatus.mockResolvedValue({});
+      mockSandboxEnvRepo.updateStatus.mockResolvedValue({
+        id: 'env-1',
+        prompt: 'cleanup env',
+        instanceType: 't3.micro',
+        status: 'DESTROYED',
+        resourceId: 'i-0abc123',
+        hourlyCost: 0.0104,
+        costIncurred: 0.0208,
+        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() - 1000),
+      });
       mockActionLogRepo.create.mockResolvedValue({});
 
       await service.handleCron();
 
-      expect(mockEc2Service.terminateInstance).toHaveBeenCalledWith('i-0abc123');
+      const finiteNumberMatcher = {
+        asymmetricMatch: (value: unknown): boolean =>
+          typeof value === 'number' && Number.isFinite(value),
+        toString: (): string => 'finite number',
+      };
+
+      expect(mockEc2Service.terminateInstance).toHaveBeenCalledWith(
+        'i-0abc123',
+      );
       expect(mockSandboxEnvRepo.updateStatus).toHaveBeenCalledWith(
         'env-1',
         'DESTROYED',
-        expect.objectContaining({ costIncurred: expect.any(Number) }),
+        expect.objectContaining({
+          costIncurred: finiteNumberMatcher,
+        }),
       );
+      const updatePayload = mockSandboxEnvRepo.updateStatus.mock.calls[0]?.[2];
+      expect(updatePayload).toBeDefined();
+      expect(Number.isFinite(updatePayload?.costIncurred ?? Number.NaN)).toBe(
+        true,
+      );
+      expect(updatePayload?.costIncurred ?? 0).toBeGreaterThan(0);
       expect(mockActionLogRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
           envId: 'env-1',
@@ -93,7 +119,17 @@ describe('CleanupWorkerService', () => {
       mockEc2Service.terminateInstance
         .mockRejectedValueOnce(new Error('Terminate failed'))
         .mockResolvedValueOnce(undefined);
-      mockSandboxEnvRepo.updateStatus.mockResolvedValue({});
+      mockSandboxEnvRepo.updateStatus.mockResolvedValue({
+        id: 'env-2',
+        prompt: 'cleanup env 2',
+        instanceType: 't4g.nano',
+        status: 'DESTROYED',
+        resourceId: 'i-success',
+        hourlyCost: 0.0042,
+        costIncurred: 0.0042,
+        createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() - 1000),
+      });
       mockActionLogRepo.create.mockResolvedValue({});
 
       await service.handleCron();
@@ -112,7 +148,17 @@ describe('CleanupWorkerService', () => {
       };
 
       mockSandboxEnvRepo.findExpiredRunning.mockResolvedValue([env]);
-      mockSandboxEnvRepo.updateStatus.mockResolvedValue({});
+      mockSandboxEnvRepo.updateStatus.mockResolvedValue({
+        id: 'env-no-resource',
+        prompt: 'cleanup env no resource',
+        instanceType: 't3.micro',
+        status: 'DESTROYED',
+        resourceId: null,
+        hourlyCost: 0.0104,
+        costIncurred: 0.0208,
+        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() - 1000),
+      });
       mockActionLogRepo.create.mockResolvedValue({});
 
       await service.handleCron();

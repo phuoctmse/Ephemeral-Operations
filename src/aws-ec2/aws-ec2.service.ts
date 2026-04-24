@@ -22,8 +22,14 @@ export class AwsEc2Service {
       region,
       ...(endpoint && { endpoint }),
       credentials: {
-        accessKeyId: this.configService.get<string>('app.awsAccessKeyId', 'test'),
-        secretAccessKey: this.configService.get<string>('app.awsSecretAccessKey', 'test'),
+        accessKeyId: this.configService.get<string>(
+          'app.awsAccessKeyId',
+          'test',
+        ),
+        secretAccessKey: this.configService.get<string>(
+          'app.awsSecretAccessKey',
+          'test',
+        ),
       },
     });
   }
@@ -39,7 +45,10 @@ export class AwsEc2Service {
       TagSpecifications: [
         {
           ResourceType: 'instance',
-          Tags: [{ Key: 'Project', Value: 'EphOps' }],
+          Tags: Object.entries(EPHOPS_TAG).map(([Key, Value]) => ({
+            Key,
+            Value,
+          })),
         },
       ],
     });
@@ -66,8 +75,13 @@ export class AwsEc2Service {
     this.logger.log(`EC2 instance terminated: ${instanceId}`);
   }
 
-  async createTags(instanceId: string, tags: Record<string, string>): Promise<void> {
-    this.logger.log(`Tagging EC2 instance ${instanceId}: ${JSON.stringify(tags)}`);
+  async createTags(
+    instanceId: string,
+    tags: Record<string, string>,
+  ): Promise<void> {
+    this.logger.log(
+      `Tagging EC2 instance ${instanceId}: ${JSON.stringify(tags)}`,
+    );
 
     const command = new CreateTagsCommand({
       Resources: [instanceId],
