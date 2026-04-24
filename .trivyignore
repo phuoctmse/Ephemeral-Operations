@@ -1,0 +1,3 @@
+# Temporary ignore for Trivy image scan
+# Remove once the base image/dependency chain is upgraded to a fixed picomatch release.
+CVE-2026-33671
