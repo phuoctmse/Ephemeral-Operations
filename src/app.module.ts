@@ -8,6 +8,7 @@ import { AwsEc2Module } from './aws-ec2/aws-ec2.module';
 import { GuardrailsModule } from './guardrails/guardrails.module';
 import { CleanupWorkerModule } from './cleanup-worker/cleanup-worker.module';
 import { PricingModule } from './pricing/pricing.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { PricingModule } from './pricing/pricing.module';
     GuardrailsModule,
     CleanupWorkerModule,
     PricingModule,
+    HealthModule,
   ],
 })
 export class AppModule {}

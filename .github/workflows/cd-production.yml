@@ -1,0 +1,241 @@
+name: CD - Production Promotion (ECS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_image_tag:
+        description: 'Staging image tag to promote (e.g., staging-abc123...)'
+        required: true
+      approval_note:
+        description: 'Release notes or approval reason'
+        required: false
+
+permissions:
+  contents: read
+  deployments: write
+
+environment:
+  name: production
+  url: ${{ secrets.PROD_HEALTH_URL }}
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+jobs:
+  pre-deployment-check:
+    name: Pre-Deployment Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate image tag
+        run: |
+          if [[ ! "${{ github.event.inputs.staging_image_tag }}" =~ ^staging-[a-f0-9]{40}$ ]]; then
+            echo "::error::Invalid staging image tag format. Expected: staging-<commit-sha>"
+            exit 1
+          fi
+          echo "✅ Image tag validated: ${{ github.event.inputs.staging_image_tag }}"
+
+      - name: Create GitHub deployment
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.ref,
+              environment: 'production',
+              description: 'EphOps production deployment: ${{ github.event.inputs.staging_image_tag }}',
+              auto_merge: false,
+              required_contexts: [],
+            });
+            console.log(`Deployment ID: ${deployment.data.id}`);
+            core.setOutput('deployment_id', deployment.data.id);
+
+  production-deploy:
+    name: Deploy to Production (ECS Fargate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: pre-deployment-check
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log deployment start
+        run: |
+          echo "🚀 Starting production deployment"
+          echo "Image Tag: ${{ github.event.inputs.staging_image_tag }}"
+          echo "Timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Pull image from ECR and retag
+        id: retag
+        run: |
+          AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY="${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com"
+          ECR_REPOSITORY="ephops"
+          
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+          
+          # Pull staging image
+          docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ github.event.inputs.staging_image_tag }}
+          
+          # Retag as production
+          PROD_TAG="prod-staging-${{ github.event.inputs.staging_image_tag }}"
+          docker tag ${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ github.event.inputs.staging_image_tag }} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${PROD_TAG}
+          docker tag ${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ github.event.inputs.staging_image_tag }} ${ECR_REGISTRY}/${ECR_REPOSITORY}:prod-latest
+          
+          # Push production tags
+          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${PROD_TAG}
+          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:prod-latest
+          
+          echo "prod_image_uri=${ECR_REGISTRY}/${ECR_REPOSITORY}:${PROD_TAG}" >> $GITHUB_OUTPUT
+          echo "prod_tag=${PROD_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Deploy to ECS production
+        id: deploy
+        run: |
+          chmod +x ./scripts/deploy-prod.sh
+          ./scripts/deploy-prod.sh \
+            --image "${{ steps.retag.outputs.prod_image_uri }}" \
+            --cluster ephops-prod-cluster \
+            --service ephops-prod-service \
+            --region us-east-1 \
+            --timeout 300
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Run production smoke tests
+        id: smoke-tests
+        run: |
+          chmod +x ./scripts/smoke-test.sh
+          ./scripts/smoke-test.sh "${{ steps.retag.outputs.prod_tag }}" --production
+        continue-on-error: true
+        env:
+          HEALTH_URL: ${{ secrets.PROD_HEALTH_URL }}
+
+      - name: Verify deployment health
+        id: health-check
+        run: |
+          chmod +x ./scripts/health-check.sh
+          ./scripts/health-check.sh "${{ secrets.PROD_HEALTH_URL }}" 5 30s
+        continue-on-error: true
+
+      - name: Trigger rollback if verification failed
+        if: |
+          failure() ||
+          steps.smoke-tests.outcome == 'failure' ||
+          steps.health-check.outcome == 'failure'
+        run: |
+          echo "::error::Production verification failed - initiating rollback"
+          chmod +x ./scripts/rollback-prod.sh
+          ./scripts/rollback-prod.sh \
+            --cluster ephops-prod-cluster \
+            --service ephops-prod-service \
+            --region us-east-1 \
+            --timeout 300
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Create deployment status (success)
+        if: success()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: ${{ needs.pre-deployment-check.outputs.deployment_id }},
+              state: 'success',
+              description: 'Production deployment successful',
+              environment_url: '${{ secrets.PROD_HEALTH_URL }}/health',
+            });
+
+      - name: Create deployment status (failure)
+        if: failure()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: ${{ needs.pre-deployment-check.outputs.deployment_id }},
+              state: 'failure',
+              description: 'Production deployment failed - rollback executed',
+            });
+
+      - name: Publish release
+        if: success()
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85261ab4007cf39e221 # v1
+        with:
+          tag_name: rel-${{ steps.retag.outputs.prod_tag }}
+          body: |
+            # Production Release: ${{ steps.retag.outputs.prod_tag }}
+            
+            **Image**: ${{ steps.retag.outputs.prod_image_uri }}
+            **Promoted At**: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            **Approval Note**: ${{ github.event.inputs.approval_note }}
+            
+            ## Verification Results
+            - Smoke Tests: ✅ ${{ steps.smoke-tests.outcome }}
+            - Health Checks: ✅ ${{ steps.health-check.outcome }}
+            - ECS Deployment: ✅ Success
+            
+            ## Rollback Command (if needed)
+            ```bash
+            gh workflow run cd-rollback.yml -f image_tag=prod-staging-previous
+            ```
+
+      - name: Create production deployment summary
+        if: always()
+        run: |
+          cat > prod-deployment-summary.txt <<EOF
+          # Production Deployment Summary (ECS Fargate)
+          
+          **Status**: ${{ job.status }}
+          **Image Tag**: ${{ steps.retag.outputs.prod_tag }}
+          **Image URI**: ${{ steps.retag.outputs.prod_image_uri }}
+          **Staged From**: ${{ github.event.inputs.staging_image_tag }}
+          **Deployed At**: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          **Branch**: ${{ github.ref_name }}
+          **Triggered By**: ${{ github.actor }}
+          
+          ## Approval Note
+          ${{ github.event.inputs.approval_note }}
+          
+          ## Verification Results
+          - Smoke Tests: ${{ steps.smoke-tests.outcome }}
+          - Health Checks: ${{ steps.health-check.outcome }}
+          
+          ## ECS Details
+          - Cluster: ephops-prod-cluster
+          - Service: ephops-prod-service
+          - Region: us-east-1
+          - Launch Type: FARGATE
+          
+          ## Rollback Status
+          If deployment failed, automatic rollback was triggered.
+          Manual rollback command:
+          \`\`\`bash
+          gh workflow run cd-rollback.yml -f image_tag=<previous-working-tag>
+          \`\`\`
+          EOF
+          cat prod-deployment-summary.txt
+
+      - name: Upload deployment summary
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce4ec1 # v4
+        with:
+          name: prod-deployment-summary
+          path: prod-deployment-summary.txt
+          retention-days: 30

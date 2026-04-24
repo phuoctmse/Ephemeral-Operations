@@ -1,0 +1,150 @@
+name: CD - Staging Deploy (ECS)
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staging-deploy:
+    name: Deploy to Staging (ECS Fargate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: |
+            ephops:staging-latest
+            ephops:staging-${{ github.sha }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create artifact metadata
+        id: meta
+        run: |
+          echo "image_tag=staging-${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "deployed_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "commit_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Output deployment info
+        run: |
+          echo "::notice title=Staging Deployment::Image: ephops:${{ steps.meta.outputs.image_tag }} | Commit: ${{ steps.meta.outputs.commit_sha }} | Time: ${{ steps.meta.outputs.deployed_at }}"
+
+      - name: Save image to tarball
+        run: |
+          docker save ephops:staging-${{ github.sha }} > /tmp/ephops-staging.tar
+          ls -lh /tmp/ephops-staging.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce4ec1 # v4
+        with:
+          name: ephops-staging-image
+          path: /tmp/ephops-staging.tar
+          retention-days: 7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Push image to ECR
+        id: push-image
+        run: |
+          AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY="${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com"
+          ECR_REPOSITORY="ephops"
+          
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+          docker tag ephops:staging-${{ github.sha }} ${ECR_REGISTRY}/${ECR_REPOSITORY}:staging-${{ github.sha }}
+          docker tag ephops:staging-latest ${ECR_REGISTRY}/${ECR_REPOSITORY}:staging-latest
+          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:staging-${{ github.sha }}
+          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:staging-latest
+          
+          echo "image_uri=${ECR_REGISTRY}/${ECR_REPOSITORY}:staging-${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Deploy to ECS staging
+        id: deploy
+        run: |
+          chmod +x ./scripts/deploy-prod.sh
+          ./scripts/deploy-prod.sh \
+            --image "${{ steps.push-image.outputs.image_uri }}" \
+            --cluster ephops-staging-cluster \
+            --service ephops-staging-service \
+            --region us-east-1 \
+            --timeout 300
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Run smoke tests
+        id: smoke-tests
+        run: |
+          chmod +x ./scripts/smoke-test.sh
+          ./scripts/smoke-test.sh staging-${{ github.sha }}
+        continue-on-error: true
+        env:
+          HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
+
+      - name: Report test results
+        if: always()
+        run: |
+          if [ "${{ steps.smoke-tests.outcome }}" = "success" ]; then
+            echo "::notice title=Smoke Tests::✅ All smoke tests passed on staging"
+          else
+            echo "::warning title=Smoke Tests::⚠️ Smoke tests failed - manual verification recommended"
+          fi
+
+      - name: Create deployment summary
+        run: |
+          cat > deployment-summary.txt <<EOF
+          # Staging Deployment Summary
+          
+          **Environment**: Staging (ECS Fargate)
+          **Commit SHA**: ${{ github.sha }}
+          **Image Tag**: staging-${{ github.sha }}
+          **Image URI**: ${{ steps.push-image.outputs.image_uri }}
+          **Deployed At**: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          **Branch**: ${{ github.ref_name }}
+          **Author**: ${{ github.actor }}
+          
+          ## Deployment Status
+          Status: ${{ steps.deploy.outcome }}
+          
+          ## Smoke Test Result
+          Status: ${{ steps.smoke-tests.outcome }}
+          
+          ## Next Steps
+          1. Monitor health endpoint: GET ${{ secrets.STAGING_HEALTH_URL }}/health
+          2. Check readiness: GET ${{ secrets.STAGING_HEALTH_URL }}/health/ready
+          3. Review logs in CloudWatch
+          4. When ready to promote: trigger production deployment
+          EOF
+          cat deployment-summary.txt
+
+      - name: Upload deployment summary
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce4ec1 # v4
+        with:
+          name: staging-deployment-summary
+          path: deployment-summary.txt
+          retention-days: 7
