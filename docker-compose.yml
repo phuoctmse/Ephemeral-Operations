@@ -35,24 +35,22 @@ services:
       - "11434:11434"
     volumes:
       - ./data/ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   ollama-pull:
     image: ollama/ollama:latest
     restart: "no"
     depends_on:
       ollama:
-        condition: service_started
+        condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    command:
-      - /bin/sh
-      - -c
-      - |
-        until ollama list >/dev/null 2>&1; do
-          echo "Waiting for Ollama API..."
-          sleep 2
-        done
-        ollama pull qwen3.5
+    command: ["pull", "qwen2.5:1.5b"]
 
   ephops-backend:
     build:
@@ -81,4 +79,4 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: qwen3.5
+      OLLAMA_MODEL: qwen2.5:1.5b

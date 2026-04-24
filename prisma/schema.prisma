@@ -35,3 +35,13 @@ model ActionLog {
   output         String     @db.Text
   timestamp      DateTime   @default(now())
 }
+
+model PricingCache {
+  id           String   @id @default(uuid())
+  instanceType String
+  region       String
+  hourlyCost   Float
+  updatedAt    DateTime @updatedAt
+
+  @@unique([instanceType, region])
+}

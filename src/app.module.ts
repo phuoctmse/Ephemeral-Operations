@@ -7,6 +7,7 @@ import { LlmModule } from './llm/llm.module';
 import { AwsEc2Module } from './aws-ec2/aws-ec2.module';
 import { GuardrailsModule } from './guardrails/guardrails.module';
 import { CleanupWorkerModule } from './cleanup-worker/cleanup-worker.module';
+import { PricingModule } from './pricing/pricing.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { CleanupWorkerModule } from './cleanup-worker/cleanup-worker.module';
     AwsEc2Module,
     GuardrailsModule,
     CleanupWorkerModule,
+    PricingModule,
   ],
 })
 export class AppModule {}

@@ -9,6 +9,7 @@ import { CreateSandboxEnvDto } from './dto/sandbox-env.dto';
 import { PRICING_TABLE } from '../common/constants/finops.constants';
 import { ProvisioningError } from '../common/exceptions/finops.exceptions';
 import type { AgentDecision } from '../common/schemas/agent-decision.schema';
+import { PricingService } from '../pricing/pricing.service';
 
 @Injectable()
 export class SandboxEnvService {
@@ -20,6 +21,7 @@ export class SandboxEnvService {
     private readonly llmService: OllamaService,
     private readonly guardrailsService: GuardrailsService,
     private readonly actionLogRepo: ActionLogRepository,
+    private readonly pricingService: PricingService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -28,7 +30,16 @@ export class SandboxEnvService {
     const maxTtl = this.configService.get<number>('app.maxTtlHours', 2);
     const requestedTtl = dto.ttlHours ?? 1;
     const ttlHours = Math.min(requestedTtl, maxTtl);
-    const hourlyCost = PRICING_TABLE[instanceType] ?? 0;
+    const region = this.configService.get<string>('app.awsRegion', 'us-east-1');
+    let hourlyCost: number;
+    try {
+      hourlyCost = await this.pricingService.getHourlyCost(
+        instanceType,
+        region,
+      );
+    } catch {
+      hourlyCost = PRICING_TABLE[instanceType] ?? 0;
+    }
     const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
 
     // Guardrails: pre-condition checks
