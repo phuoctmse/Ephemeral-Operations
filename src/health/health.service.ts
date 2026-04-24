@@ -35,7 +35,11 @@ export class HealthService {
         },
       };
     } catch (error) {
-      this.logger.error('Health check failed', error);
+      const err = error as Error;
+      this.logger.error(
+        `Health check failed: ${err.message ?? 'Unknown error'}`,
+        err.stack ?? String(err),
+      );
       throw new HttpException(
         {
           status: 'down',
@@ -56,7 +60,11 @@ export class HealthService {
       await this.prisma.$queryRaw`SELECT 1`;
       return { ready: true };
     } catch (error) {
-      this.logger.error('Readiness check failed', error);
+      const err = error as Error;
+      this.logger.error(
+        `Readiness check failed: ${err.message ?? 'Unknown error'}`,
+        err.stack ?? String(err),
+      );
       throw new HttpException({ ready: false }, HttpStatus.SERVICE_UNAVAILABLE);
     }
   }
