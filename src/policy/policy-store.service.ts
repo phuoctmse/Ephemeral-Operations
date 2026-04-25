@@ -15,12 +15,7 @@ export class PolicyStoreService implements OnModuleInit {
   private readonly logger = new Logger(PolicyStoreService.name);
   private documents: PolicyDocument[] = [];
 
-  private readonly docsRoot = path.join(
-    process.cwd(),
-    'src',
-    'policy',
-    'documents',
-  );
+  private readonly docsRoot = path.join(__dirname, 'documents');
 
   onModuleInit() {
     this.loadDocuments();

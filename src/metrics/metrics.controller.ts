@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import {
   ApiOperation,
   ApiResponse,
@@ -9,9 +9,11 @@ import {
   AgentMetricsService,
   type FinOpsMetrics,
 } from './agent-metrics.service';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 @ApiTags('Metrics')
 @ApiSecurity('api-key')
+@UseGuards(ApiKeyGuard)
 @Controller('metrics')
 export class MetricsController {
   constructor(private readonly metricsService: AgentMetricsService) {}

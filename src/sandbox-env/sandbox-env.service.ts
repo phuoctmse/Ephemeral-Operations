@@ -1,4 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SandboxEnvRepository } from './sandbox-env.repository';
 import { AwsEc2Service } from '../aws-ec2/aws-ec2.service';
@@ -70,7 +76,11 @@ export class SandboxEnvService {
         }),
       });
 
-      throw error;
+      throw new BadRequestException({
+        error: 'invalid_instance_type',
+        message,
+        instanceType,
+      });
     }
 
     // Guardrails: concurrency check + env creation in a single transaction to prevent race condition
@@ -80,11 +90,11 @@ export class SandboxEnvService {
           'app.maxConcurrentEnvs',
           2,
         );
-        const runningCount = await tx.sandboxEnv.count({
-          where: { status: 'RUNNING' },
+        const admittedCount = await tx.sandboxEnv.count({
+          where: { status: { in: ['RUNNING', 'CREATING'] } },
         });
 
-        if (runningCount >= maxConcurrent) {
+        if (admittedCount >= maxConcurrent) {
           throw Object.assign(
             new Error(
               `Maximum concurrent environments (${maxConcurrent}) reached. Please destroy an existing environment first.`,
@@ -115,6 +125,17 @@ export class SandboxEnvService {
             toolCalled: 'guardrails_concurrency_block',
             output: JSON.stringify({ reason: 'concurrency_limit_exceeded' }),
           });
+
+          const maxConcurrent = (error as unknown as Record<string, unknown>)
+            .maxConcurrent as number;
+          throw new HttpException(
+            {
+              error: 'concurrency_limit_exceeded',
+              message: error.message,
+              maxConcurrent,
+            },
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
         }
         throw error;
       });

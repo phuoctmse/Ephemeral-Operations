@@ -76,11 +76,9 @@ export class AgentMetricsService {
       (sum, s) => sum + (s._sum.costIncurred ?? 0),
       0,
     );
+    const totalEnvCount = envStats.reduce((sum, s) => sum + s._count.id, 0);
     const avgHourlyCostUsd =
-      envStats.length > 0
-        ? envStats.reduce((sum, s) => sum + (s._avg.hourlyCost ?? 0), 0) /
-          envStats.length
-        : null;
+      totalEnvCount > 0 ? totalEstimatedCostUsd / totalEnvCount : null;
 
     // Decision metrics from action logs
     const reasoningLogs = actionLogs.filter(
@@ -128,8 +126,11 @@ export class AgentMetricsService {
         latencies.reduce((a, b) => a + b, 0) / latencies.length,
       );
       const sorted = [...latencies].sort((a, b) => a - b);
-      const p95Index = Math.floor(sorted.length * 0.95);
-      p95DecisionLatencyMs = sorted[p95Index] ?? sorted[sorted.length - 1];
+      const p95Index = Math.max(
+        0,
+        Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1),
+      );
+      p95DecisionLatencyMs = sorted[p95Index];
     }
 
     // Guardrails block counts

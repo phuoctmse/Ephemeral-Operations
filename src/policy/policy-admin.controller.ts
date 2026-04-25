@@ -1,4 +1,4 @@
-import { Controller, HttpCode, Post } from '@nestjs/common';
+import { Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   ApiOperation,
@@ -7,9 +7,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { PolicyStoreService } from './policy-store.service';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 @ApiTags('Admin')
 @ApiSecurity('api-key')
+@UseGuards(ApiKeyGuard)
 @Controller('admin/policy')
 export class PolicyAdminController {
   constructor(private readonly store: PolicyStoreService) {}

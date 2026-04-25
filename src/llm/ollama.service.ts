@@ -271,17 +271,18 @@ Analyze this request. Should we APPROVE or REJECT? Respond with JSON.`;
   }
 
   async isAvailable(): Promise<boolean> {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), 5000);
     try {
-      const controller = new AbortController();
-      const timeoutHandle = setTimeout(() => controller.abort(), 5000);
       const response = await fetch(`${this.baseUrl}/api/tags`, {
         method: 'GET',
         signal: controller.signal,
       });
-      clearTimeout(timeoutHandle);
       return response.ok;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeoutHandle);
     }
   }
 
