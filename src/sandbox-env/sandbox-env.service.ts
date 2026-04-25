@@ -1,4 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SandboxEnvRepository } from './sandbox-env.repository';
 import { AwsEc2Service } from '../aws-ec2/aws-ec2.service';
@@ -8,8 +14,8 @@ import { ActionLogRepository } from '../action-log/action-log.repository';
 import { CreateSandboxEnvDto } from './dto/sandbox-env.dto';
 import { PRICING_TABLE } from '../common/constants/finops.constants';
 import { ProvisioningError } from '../common/exceptions/finops.exceptions';
-import type { AgentDecision } from '../common/schemas/agent-decision.schema';
 import { PricingService } from '../pricing/pricing.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class SandboxEnvService {
@@ -23,6 +29,7 @@ export class SandboxEnvService {
     private readonly actionLogRepo: ActionLogRepository,
     private readonly pricingService: PricingService,
     private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async provision(dto: CreateSandboxEnvDto) {
@@ -31,6 +38,7 @@ export class SandboxEnvService {
     const requestedTtl = dto.ttlHours ?? 1;
     const ttlHours = Math.min(requestedTtl, maxTtl);
     const region = this.configService.get<string>('app.awsRegion', 'us-east-1');
+
     let hourlyCost: number;
     try {
       hourlyCost = await this.pricingService.getHourlyCost(
@@ -42,32 +50,118 @@ export class SandboxEnvService {
     }
     const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
 
-    // Guardrails: pre-condition checks
-    this.guardrailsService.validateInstanceType(instanceType);
-    await this.guardrailsService.validateConcurrency();
+    // Guardrails: instance type check (no DB needed, safe to run outside transaction)
+    try {
+      this.guardrailsService.validateInstanceType(instanceType);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown guardrails error';
+      this.logger.warn(`Guardrails blocked request: ${message}`);
 
-    // Create DB record in CREATING state
-    const env = await this.repo.create({
-      prompt: dto.prompt,
-      instanceType,
-      expiresAt,
-      hourlyCost,
-    });
+      // Persist guardrails block — create a minimal env record to attach the log
+      const blockedEnv = await this.repo.create({
+        prompt: dto.prompt,
+        instanceType,
+        expiresAt,
+        hourlyCost,
+      });
+      await this.repo.updateToFailed(blockedEnv.id, message);
+      await this.actionLogRepo.create({
+        envId: blockedEnv.id,
+        agentReasoning: message,
+        toolCalled: 'guardrails_block',
+        output: JSON.stringify({
+          reason: 'invalid_instance_type',
+          instanceType,
+        }),
+      });
+
+      throw new BadRequestException({
+        error: 'invalid_instance_type',
+        message,
+        instanceType,
+      });
+    }
+
+    // Guardrails: concurrency check + env creation in a single transaction to prevent race condition
+    const env = await this.prisma
+      .$transaction(async (tx) => {
+        const maxConcurrent = this.configService.get<number>(
+          'app.maxConcurrentEnvs',
+          2,
+        );
+        const admittedCount = await tx.sandboxEnv.count({
+          where: { status: { in: ['RUNNING', 'CREATING'] } },
+        });
+
+        if (admittedCount >= maxConcurrent) {
+          throw Object.assign(
+            new Error(
+              `Maximum concurrent environments (${maxConcurrent}) reached. Please destroy an existing environment first.`,
+            ),
+            { name: 'ConcurrencyLimitError', maxConcurrent },
+          );
+        }
+
+        return tx.sandboxEnv.create({
+          data: { prompt: dto.prompt, instanceType, expiresAt, hourlyCost },
+        });
+      })
+      .catch(async (error) => {
+        if (error instanceof Error && error.name === 'ConcurrencyLimitError') {
+          this.logger.warn(`Guardrails blocked request: ${error.message}`);
+
+          // Persist concurrency block — needs a separate env record
+          const blockedEnv = await this.repo.create({
+            prompt: dto.prompt,
+            instanceType,
+            expiresAt,
+            hourlyCost,
+          });
+          await this.repo.updateToFailed(blockedEnv.id, error.message);
+          await this.actionLogRepo.create({
+            envId: blockedEnv.id,
+            agentReasoning: error.message,
+            toolCalled: 'guardrails_concurrency_block',
+            output: JSON.stringify({ reason: 'concurrency_limit_exceeded' }),
+          });
+
+          const maxConcurrent = (error as unknown as Record<string, unknown>)
+            .maxConcurrent as number;
+          throw new HttpException(
+            {
+              error: 'concurrency_limit_exceeded',
+              message: error.message,
+              maxConcurrent,
+            },
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
+        throw error;
+      });
 
     try {
-      // Ask LLM for decision
-      const decision: AgentDecision = await this.llmService.analyzePrompt(
+      // Ask LLM for decision (with latency tracking)
+      const llmResult = await this.llmService.analyzePrompt(
         dto.prompt,
         instanceType,
         ttlHours,
       );
+      const { decision, durationMs, fallbackUsed } = llmResult;
 
-      // Log AI reasoning
+      if (fallbackUsed) {
+        this.logger.warn(
+          `LLM fallback was used for env ${env.id} (durationMs=${durationMs})`,
+        );
+      }
+
+      // Log AI reasoning with latency
       await this.actionLogRepo.create({
         envId: env.id,
         agentReasoning: decision.reasoning,
         toolCalled: 'log_reasoning',
-        output: JSON.stringify(decision),
+        output: JSON.stringify({ ...decision, fallbackUsed }),
+        durationMs,
       });
 
       if (decision.decision === 'REJECT') {
@@ -101,8 +195,6 @@ export class SandboxEnvService {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`Provisioning failed for env ${env.id}: ${message}`);
-
-      // Rollback: update status to FAILED
       await this.repo.updateToFailed(env.id, message);
       throw new ProvisioningError(message);
     }
@@ -137,7 +229,6 @@ export class SandboxEnvService {
       );
     }
 
-    // Calculate cost incurred
     const hoursElapsed =
       (Date.now() - env.createdAt.getTime()) / (1000 * 60 * 60);
     const costIncurred = Number((hoursElapsed * env.hourlyCost).toFixed(6));

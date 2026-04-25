@@ -10,6 +10,7 @@ export class ActionLogRepository {
     agentReasoning: string;
     toolCalled: string;
     output: string;
+    durationMs?: number;
   }) {
     return this.prisma.actionLog.create({ data });
   }

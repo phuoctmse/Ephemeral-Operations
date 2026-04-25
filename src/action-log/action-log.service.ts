@@ -17,6 +17,7 @@ export class ActionLogService {
     agentReasoning: string;
     toolCalled: string;
     output: string;
+    durationMs?: number;
   }) {
     return this.repo.create(data);
   }

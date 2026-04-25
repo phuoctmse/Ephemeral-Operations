@@ -4,6 +4,8 @@ export interface AppConfig {
   nodeEnv: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
+  ollamaFallbackModel: string;
+  ollamaTimeoutMs: number;
   awsRegion: string;
   awsAccessKeyId: string;
   awsSecretAccessKey: string;
@@ -15,12 +17,22 @@ export interface AppConfig {
   maxTtlHours: number;
 }
 
-export default registerAs(
-  'app',
-  (): AppConfig => ({
+export default registerAs('app', (): AppConfig => {
+  const ollamaTimeoutMsRaw = parseInt(
+    process.env['OLLAMA_TIMEOUT_MS'] ?? '15000',
+    10,
+  );
+  const ollamaTimeoutMs =
+    Number.isFinite(ollamaTimeoutMsRaw) && ollamaTimeoutMsRaw >= 1000
+      ? ollamaTimeoutMsRaw
+      : 15000;
+
+  return {
     nodeEnv: process.env['NODE_ENV'] ?? 'local',
     ollamaBaseUrl: process.env['OLLAMA_BASE_URL'] ?? 'http://localhost:11434',
     ollamaModel: process.env['OLLAMA_MODEL'] ?? 'llama3.2',
+    ollamaFallbackModel: process.env['OLLAMA_FALLBACK_MODEL'] ?? '',
+    ollamaTimeoutMs,
     awsRegion: process.env['AWS_REGION'] ?? 'us-east-1',
     awsAccessKeyId: process.env['AWS_ACCESS_KEY_ID'] ?? '',
     awsSecretAccessKey: process.env['AWS_SECRET_ACCESS_KEY'] ?? '',
@@ -36,5 +48,5 @@ export default registerAs(
     ),
     maxConcurrentEnvs: parseInt(process.env['MAX_CONCURRENT_ENVS'] ?? '2', 10),
     maxTtlHours: parseInt(process.env['MAX_TTL_HOURS'] ?? '2', 10),
-  }),
-);
+  };
+});

@@ -43,6 +43,7 @@ async function bootstrap(): Promise<void> {
     .addTag('Sandbox Environments')
     .addTag('Action Logs')
     .addTag('Pricing')
+    .addTag('Metrics')
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);

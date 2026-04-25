@@ -18,6 +18,8 @@ export const AgentDecisionSchema = z.object({
       totalExpected: z.number(),
     })
     .optional(),
+  fallbackUsed: z.boolean().optional(),
+  guardrailsTriggered: z.boolean().optional(),
 });
 
 export type AgentDecision = z.infer<typeof AgentDecisionSchema>;

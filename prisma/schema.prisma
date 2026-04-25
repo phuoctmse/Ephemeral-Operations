@@ -33,6 +33,7 @@ model ActionLog {
   agentReasoning String     @db.Text
   toolCalled     String
   output         String     @db.Text
+  durationMs     Int?
   timestamp      DateTime   @default(now())
 }
 

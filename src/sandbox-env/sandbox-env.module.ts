@@ -7,6 +7,7 @@ import { LlmModule } from '../llm/llm.module';
 import { GuardrailsModule } from '../guardrails/guardrails.module';
 import { ActionLogModule } from '../action-log/action-log.module';
 import { PricingModule } from '../pricing/pricing.module';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { PricingModule } from '../pricing/pricing.module';
     GuardrailsModule,
     ActionLogModule,
     PricingModule,
+    PrismaModule,
   ],
   controllers: [SandboxEnvController],
   providers: [SandboxEnvService, SandboxEnvRepository],

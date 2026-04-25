@@ -28,55 +28,55 @@ services:
       retries: 10
       start_period: 10s
 
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ./data/ollama:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ./data/ollama:/root/.ollama
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 20
+  #     start_period: 10s
 
-  ollama-pull:
-    image: ollama/ollama:latest
-    restart: "no"
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    command: ["pull", "qwen2.5:1.5b"]
+  # ollama-pull:
+  #   image: ollama/ollama:latest
+  #   restart: "no"
+  #   depends_on:
+  #     ollama:
+  #       condition: service_healthy
+  #   environment:
+  #     OLLAMA_HOST: http://ollama:11434
+  #   command: ["pull", "qwen2.5:1.5b"]
 
-  ephops-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
-    image: ephops-backend
-    restart: unless-stopped
-    depends_on:
-      postgresql:
-        condition: service_healthy
-      floci:
-        condition: service_started
-      ollama:
-        condition: service_started
-      ollama-pull:
-        condition: service_completed_successfully
-    ports:
-      - "3000:3000"
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/ephops
-      AWS_REGION: us-east-1
-      AWS_ENDPOINT: http://floci:4566
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: qwen2.5:1.5b
+  # ephops-backend:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     target: production
+  #   image: ephops-backend
+  #   restart: unless-stopped
+  #   depends_on:
+  #     postgresql:
+  #       condition: service_healthy
+  #     floci:
+  #       condition: service_started
+  #     ollama:
+  #       condition: service_started
+  #     ollama-pull:
+  #       condition: service_completed_successfully
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     NODE_ENV: production
+  #     PORT: 3000
+  #     DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/ephops
+  #     AWS_REGION: us-east-1
+  #     AWS_ENDPOINT: http://floci:4566
+  #     AWS_ACCESS_KEY_ID: test
+  #     AWS_SECRET_ACCESS_KEY: test
+  #     OLLAMA_BASE_URL: http://ollama:11434
+  #     OLLAMA_MODEL: qwen2.5:1.5b
