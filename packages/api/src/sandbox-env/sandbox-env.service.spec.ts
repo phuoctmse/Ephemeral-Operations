@@ -1,6 +1,5 @@
 import { Test } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { SandboxEnvService } from './sandbox-env.service';
 import { SandboxEnvRepository } from './sandbox-env.repository';
 import { AwsEc2Service } from '../aws-ec2/aws-ec2.service';
@@ -10,6 +9,7 @@ import { ActionLogRepository } from '../action-log/action-log.repository';
 import { UnauthorizedInstanceTypeError } from '../common/exceptions/finops.exceptions';
 import { PricingService } from '../pricing/pricing.service';
 import { PrismaService } from '../prisma/prisma.service';
+import appConfig from '../common/config/app.config';
 
 const approveResult = {
   decision: {
@@ -104,16 +104,11 @@ describe('SandboxEnvService', () => {
         { provide: PricingService, useValue: mockPricing },
         { provide: PrismaService, useValue: mockPrisma },
         {
-          provide: ConfigService,
+          provide: appConfig.KEY,
           useValue: {
-            get: (key: string, defaultValue?: number | string) => {
-              const config: Record<string, number | string> = {
-                'app.maxTtlHours': 2,
-                'app.awsRegion': 'us-east-1',
-                'app.maxConcurrentEnvs': 2,
-              };
-              return config[key] ?? defaultValue;
-            },
+            maxTtlHours: 2,
+            awsRegion: 'us-east-1',
+            maxConcurrentEnvs: 2,
           },
         },
       ],

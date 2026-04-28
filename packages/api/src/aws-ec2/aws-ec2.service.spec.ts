@@ -1,5 +1,4 @@
 import { Test } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { AwsEc2Service } from './aws-ec2.service';
 import {
   EC2Client,
@@ -8,6 +7,7 @@ import {
   CreateTagsCommand,
 } from '@aws-sdk/client-ec2';
 import { mockClient } from 'aws-sdk-client-mock';
+import appConfig from '../common/config/app.config';
 
 describe('AwsEc2Service', () => {
   let service: AwsEc2Service;
@@ -20,17 +20,12 @@ describe('AwsEc2Service', () => {
       providers: [
         AwsEc2Service,
         {
-          provide: ConfigService,
+          provide: appConfig.KEY,
           useValue: {
-            get: (key: string, defaultValue?: string) => {
-              const config: Record<string, string> = {
-                'app.awsRegion': 'us-east-1',
-                'app.awsEndpoint': 'http://localhost:4566',
-                'app.awsAccessKeyId': 'test',
-                'app.awsSecretAccessKey': 'test',
-              };
-              return config[key] ?? defaultValue;
-            },
+            awsRegion: 'us-east-1',
+            awsEndpoint: 'http://localhost:4566',
+            awsAccessKeyId: 'test',
+            awsSecretAccessKey: 'test',
           },
         },
       ],

@@ -1,5 +1,4 @@
 import { Test } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { OllamaService } from './ollama.service';
 import { PricingService } from '../pricing/pricing.service';
 import { PolicyRetrieverService } from '../policy/policy-retriever.service';
@@ -11,6 +10,7 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import appConfig from '../common/config/app.config';
 
 const mockDecision = {
   decision: 'APPROVE',
@@ -36,19 +36,14 @@ describe('OllamaService', () => {
       providers: [
         OllamaService,
         {
-          provide: ConfigService,
+          provide: appConfig.KEY,
           useValue: {
-            get: (key: string, defaultValue?: string | number) => {
-              const config: Record<string, string | number> = {
-                'app.ollamaBaseUrl': 'http://localhost:11434',
-                'app.ollamaModel': 'llama3.2',
-                'app.ollamaFallbackModel': '',
-                'app.ollamaTimeoutMs': 15000,
-                'app.awsRegion': 'us-east-1',
-                ...configOverrides,
-              };
-              return config[key] ?? defaultValue;
-            },
+            ollamaBaseUrl: 'http://localhost:11434',
+            ollamaModel: 'llama3.2',
+            ollamaFallbackModel: '',
+            ollamaTimeoutMs: 15000,
+            awsRegion: 'us-east-1',
+            ...configOverrides,
           },
         },
         {
@@ -152,9 +147,9 @@ describe('OllamaService', () => {
 
     it('should use fallback model when primary model times out', async () => {
       service = await buildModule({
-        'app.ollamaModel': 'primary-model',
-        'app.ollamaFallbackModel': 'fallback-model',
-        'app.ollamaTimeoutMs': 100,
+        ollamaModel: 'primary-model',
+        ollamaFallbackModel: 'fallback-model',
+        ollamaTimeoutMs: 100,
       });
 
       // Primary times out, fallback succeeds
@@ -184,8 +179,8 @@ describe('OllamaService', () => {
 
     it('should fail closed when both primary and fallback models fail', async () => {
       service = await buildModule({
-        'app.ollamaModel': 'primary-model',
-        'app.ollamaFallbackModel': 'fallback-model',
+        ollamaModel: 'primary-model',
+        ollamaFallbackModel: 'fallback-model',
       });
 
       mockFetch.mockRejectedValue(new Error('Connection refused'));
