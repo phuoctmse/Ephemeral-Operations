@@ -1,5 +1,4 @@
 import { Test } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { GuardrailsService } from './guardrails.service';
 import { SandboxEnvRepository } from '../sandbox-env/sandbox-env.repository';
 import {
@@ -7,6 +6,7 @@ import {
   ConcurrencyLimitError,
   TtlExceededError,
 } from '../common/exceptions/finops.exceptions';
+import appConfig from '../common/config/app.config';
 
 describe('GuardrailsService', () => {
   let service: GuardrailsService;
@@ -19,15 +19,10 @@ describe('GuardrailsService', () => {
       providers: [
         GuardrailsService,
         {
-          provide: ConfigService,
+          provide: appConfig.KEY,
           useValue: {
-            get: (key: string, defaultValue?: number) => {
-              const config: Record<string, number> = {
-                'app.maxConcurrentEnvs': 2,
-                'app.maxTtlHours': 2,
-              };
-              return config[key] ?? defaultValue;
-            },
+            maxConcurrentEnvs: 2,
+            maxTtlHours: 2,
           },
         },
         {
