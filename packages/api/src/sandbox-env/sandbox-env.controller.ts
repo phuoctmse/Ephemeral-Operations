@@ -1,12 +1,28 @@
-import { Controller, Get, Post, Delete, Body, Param } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiSecurity,
+} from '@nestjs/swagger';
 import { SandboxEnvService } from './sandbox-env.service';
 import {
   CreateSandboxEnvDto,
   SandboxEnvResponseDto,
 } from './dto/sandbox-env.dto';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 @ApiTags('Sandbox Environments')
+@ApiSecurity('api-key')
+@UseGuards(ApiKeyGuard)
 @Controller('sandbox')
 export class SandboxEnvController {
   constructor(private readonly service: SandboxEnvService) {}

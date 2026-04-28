@@ -1,9 +1,12 @@
-import { Controller, Get, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiQuery, ApiSecurity } from '@nestjs/swagger';
 import { ActionLogService } from './action-log.service';
 import { FilterActionLogDto } from './dto/action-log.dto';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 @ApiTags('Action Logs')
+@ApiSecurity('api-key')
+@UseGuards(ApiKeyGuard)
 @Controller('action-logs')
 export class ActionLogController {
   constructor(private readonly service: ActionLogService) {}

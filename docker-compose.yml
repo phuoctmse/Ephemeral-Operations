@@ -40,6 +40,8 @@ services:
         condition: service_healthy
       floci:
         condition: service_started
+      ollama:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
@@ -50,6 +52,9 @@ services:
       AWS_ENDPOINT: http://floci:4566
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen2.5:1.5b
+      API_KEY: ${API_KEY:-ephops-dev-key}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health/live || exit 1"]
       interval: 10s
