@@ -1,70 +1,55 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Environment, Metrics } from '@ephops/shared-types'
 import MetricCard from '../components/MetricCard'
 import EnvironmentTable from '../components/EnvironmentTable'
 import Card from '../components/Card'
 import Button from '../components/Button'
+import ProvisionModal from '../components/ProvisionModal'
+import { fetchEnvironments, fetchFinOpsMetrics } from '../lib/api'
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [environments, setEnvironments] = useState<Environment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [metricsError, setMetricsError] = useState<string | null>(null)
+  const [provisionOpen, setProvisionOpen] = useState(false)
+
+  const fetchData = useCallback(async () => {
+    setError(null)
+    setMetricsError(null)
+    setLoading(true)
+    try {
+      const [envsResult, metricsResult] = await Promise.allSettled([
+        fetchEnvironments(),
+        fetchFinOpsMetrics(),
+      ])
+
+      if (envsResult.status === 'fulfilled') {
+        setEnvironments(envsResult.value)
+      } else {
+        setError(
+          envsResult.reason instanceof Error
+            ? envsResult.reason.message
+            : 'Failed to load environments',
+        )
+      }
+
+      if (metricsResult.status === 'fulfilled') {
+        setMetrics(metricsResult.value)
+      } else {
+        setMetricsError(
+          metricsResult.reason instanceof Error
+            ? metricsResult.reason.message
+            : 'Failed to load metrics',
+        )
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true)
-        // Mock data - replace with actual API calls
-        setMetrics({
-          totalCost: 1234.56,
-          averageLatency: 245,
-          environmentCount: 12,
-          activeAgents: 6,
-        })
-
-        setEnvironments([
-          {
-            id: 'env-001-abc-def',
-            name: 'Production Cluster',
-            state: 'RUNNING',
-            createdAt: new Date().toISOString(),
-            cost: 345.67,
-            region: 'us-east-1',
-            instanceCount: 4,
-            agentReasoning: 'Auto-scaled based on CPU metrics',
-          },
-          {
-            id: 'env-002-xyz-uvw',
-            name: 'Staging Environment',
-            state: 'CREATING',
-            createdAt: new Date().toISOString(),
-            cost: 89.23,
-            region: 'us-west-2',
-            instanceCount: 2,
-            agentReasoning: 'Provisioning new instances for testing',
-          },
-          {
-            id: 'env-003-123-456',
-            name: 'Dev Environment',
-            state: 'RUNNING',
-            createdAt: new Date(Date.now() - 86400000).toISOString(),
-            cost: 45.12,
-            region: 'eu-west-1',
-            instanceCount: 1,
-            agentReasoning: 'Single instance for local development',
-          },
-        ])
-
-        setError(null)
-      } catch (err) {
-        setError('Failed to load dashboard data')
-        console.error(err)
-      } finally {
-        setLoading(false)
-      }
-    }
-
     fetchData()
   }, [])
 
@@ -87,22 +72,29 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="ghost">Refresh</Button>
-          <Button variant="primary">Provision</Button>
+          <Button variant="ghost" onClick={fetchData}>Refresh</Button>
+          <Button variant="primary" onClick={() => setProvisionOpen(true)}>Provision</Button>
         </div>
       </div>
 
-      {/* Error State */}
+      {/* Environment Error */}
       {error && (
         <Card className="bg-red-950 border-ephops-state-failed">
           <p className="text-ephops-state-failed text-sm">{error}</p>
         </Card>
       )}
 
+      {/* Metrics Error */}
+      {metricsError && (
+        <Card className="bg-red-950 border-ephops-state-failed">
+          <p className="text-ephops-state-failed text-sm">{metricsError}</p>
+        </Card>
+      )}
+
       {/* Metrics Grid */}
       {metrics && (
         <div className="grid grid-cols-4 gap-4">
-          <MetricCard label="Total Cost" value={`$${metrics.totalCost.toFixed(2)}`} />
+          <MetricCard label="Total Cost" value={`${metrics.totalCost.toFixed(2)}`} />
           <MetricCard label="Avg Latency" value={metrics.averageLatency} unit="ms" />
           <MetricCard label="Environments" value={metrics.environmentCount} />
           <MetricCard label="Active Agents" value={metrics.activeAgents} />
@@ -142,6 +134,12 @@ export default function Dashboard() {
           </div>
         </Card>
       </div>
+
+      <ProvisionModal
+        open={provisionOpen}
+        onClose={() => setProvisionOpen(false)}
+        onSuccess={fetchData}
+      />
     </div>
   )
 }

@@ -4,8 +4,9 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  Inject,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import type { ConfigType } from '@nestjs/config';
 import { SandboxEnvRepository } from './sandbox-env.repository';
 import { AwsEc2Service } from '../aws-ec2/aws-ec2.service';
 import { OllamaService } from '../llm/ollama.service';
@@ -16,6 +17,7 @@ import { PRICING_TABLE } from '../common/constants/finops.constants';
 import { ProvisioningError } from '../common/exceptions/finops.exceptions';
 import { PricingService } from '../pricing/pricing.service';
 import { PrismaService } from '../prisma/prisma.service';
+import appConfig from '../common/config/app.config';
 
 @Injectable()
 export class SandboxEnvService {
@@ -28,16 +30,17 @@ export class SandboxEnvService {
     private readonly guardrailsService: GuardrailsService,
     private readonly actionLogRepo: ActionLogRepository,
     private readonly pricingService: PricingService,
-    private readonly configService: ConfigService,
+    @Inject(appConfig.KEY)
+    private readonly config: ConfigType<typeof appConfig>,
     private readonly prisma: PrismaService,
   ) {}
 
   async provision(dto: CreateSandboxEnvDto) {
     const instanceType = dto.instanceType ?? 't3.micro';
-    const maxTtl = this.configService.get<number>('app.maxTtlHours', 2);
+    const maxTtl = this.config.maxTtlHours;
     const requestedTtl = dto.ttlHours ?? 1;
     const ttlHours = Math.min(requestedTtl, maxTtl);
-    const region = this.configService.get<string>('app.awsRegion', 'us-east-1');
+    const region = this.config.awsRegion;
 
     let hourlyCost: number;
     try {
@@ -86,10 +89,7 @@ export class SandboxEnvService {
     // Guardrails: concurrency check + env creation in a single transaction to prevent race condition
     const env = await this.prisma
       .$transaction(async (tx) => {
-        const maxConcurrent = this.configService.get<number>(
-          'app.maxConcurrentEnvs',
-          2,
-        );
+        const maxConcurrent = this.config.maxConcurrentEnvs;
         const admittedCount = await tx.sandboxEnv.count({
           where: { status: { in: ['RUNNING', 'CREATING'] } },
         });

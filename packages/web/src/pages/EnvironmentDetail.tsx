@@ -4,64 +4,68 @@ import { Environment, ActionLog } from '@ephops/shared-types'
 import Card from '../components/Card'
 import StatusBadge from '../components/StatusBadge'
 import Button from '../components/Button'
+import { fetchEnvironmentById, fetchActionLogs, terminateEnvironment } from '../lib/api'
+import { ApiError } from '../lib/ApiError'
 
 export default function EnvironmentDetail() {
   const { id } = useParams<{ id: string }>()
   const [environment, setEnvironment] = useState<Environment | null>(null)
   const [logs, setLogs] = useState<ActionLog[]>([])
   const [loading, setLoading] = useState(true)
+  const [envError, setEnvError] = useState<string | null>(null)
+  const [logsError, setLogsError] = useState<string | null>(null)
+  const [terminating, setTerminating] = useState(false)
+  const [terminateError, setTerminateError] = useState<string | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [expandedLog, setExpandedLog] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        setLoading(true)
-        // Mock data
-        setEnvironment({
-          id: id || 'env-001',
-          name: 'Production Cluster',
-          state: 'RUNNING',
-          createdAt: new Date(Date.now() - 86400000).toISOString(),
-          cost: 345.67,
-          region: 'us-east-1',
-          instanceCount: 4,
-          agentReasoning: 'Auto-scaled to handle peak traffic load detected by metrics',
-        })
+      setLoading(true)
+      const [envResult, logsResult] = await Promise.allSettled([
+        fetchEnvironmentById(id!),
+        fetchActionLogs(id!),
+      ])
 
-        setLogs([
-          {
-            id: 'log-001',
-            envId: id || 'env-001',
-            toolCalled: 'CreateEC2Instance',
-            durationMs: 3245,
-            agentReasoning: 'CPU utilization exceeded 85% threshold',
-            output: {
-              instanceId: 'i-0a1b2c3d4e5f6g7h8',
-              instanceType: 't3.large',
-              az: 'us-east-1a',
-            },
-            createdAt: new Date(Date.now() - 3600000).toISOString(),
-          },
-          {
-            id: 'log-002',
-            envId: id || 'env-001',
-            toolCalled: 'ValidateCost',
-            durationMs: 245,
-            agentReasoning: 'Validating monthly cost projections',
-            output: {
-              projectedCost: 12450,
-              thresholdExceeded: false,
-            },
-            createdAt: new Date(Date.now() - 1800000).toISOString(),
-          },
-        ])
-      } finally {
-        setLoading(false)
+      if (envResult.status === 'fulfilled') {
+        setEnvironment(envResult.value)
+      } else {
+        const err = envResult.reason as Error
+        if (err instanceof ApiError && err.status === 404) {
+          setEnvError('Environment not found')
+        } else {
+          setEnvError(err.message || 'Failed to load environment')
+        }
       }
+
+      if (logsResult.status === 'fulfilled') {
+        setLogs(logsResult.value)
+      } else {
+        const err = logsResult.reason as Error
+        setLogsError(err.message || 'Failed to load action logs')
+      }
+
+      setLoading(false)
     }
 
     fetchData()
   }, [id])
+
+  const handleTerminate = async () => {
+    setTerminating(true)
+    setTerminateError(null)
+    setConfirmOpen(false)
+    try {
+      await terminateEnvironment(id!)
+      const updated = await fetchEnvironmentById(id!)
+      setEnvironment(updated)
+    } catch (err) {
+      const e = err as Error
+      setTerminateError(e.message || 'Failed to terminate environment')
+    } finally {
+      setTerminating(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -71,135 +75,169 @@ export default function EnvironmentDetail() {
     )
   }
 
-  if (!environment) {
-    return (
-      <div className="p-6">
-        <p className="text-ephops-state-failed">Environment not found</p>
-      </div>
-    )
-  }
-
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-2xl font-semibold text-ephops-text-primary">{environment.name}</h1>
-            <StatusBadge state={environment.state} />
-          </div>
-          <p className="text-sm text-ephops-text-secondary font-mono">{environment.id}</p>
-        </div>
-        <div className="flex gap-3">
-          <Button variant="ghost">Refresh</Button>
-          {environment.state !== 'DESTROYED' && (
-            <Button variant="danger">Terminate</Button>
+          {envError ? (
+            <p className="text-ephops-state-failed">{envError}</p>
+          ) : (
+            <>
+              <div className="flex items-center gap-3 mb-2">
+                <h1 className="text-2xl font-semibold text-ephops-text-primary">{environment!.name}</h1>
+                <StatusBadge state={environment!.state} />
+              </div>
+              <p className="text-sm text-ephops-text-secondary font-mono">{environment!.id}</p>
+            </>
           )}
         </div>
+        {!envError && (
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex gap-3">
+              <Button variant="ghost">Refresh</Button>
+              <Button
+                variant="danger"
+                disabled={terminating || environment?.state === 'DESTROYED'}
+                onClick={() => setConfirmOpen(true)}
+              >
+                {terminating ? 'Terminating...' : 'Terminate'}
+              </Button>
+            </div>
+            {terminateError && (
+              <p className="text-xs text-ephops-state-failed">{terminateError}</p>
+            )}
+            {confirmOpen && (
+              <div className="bg-ephops-surface border border-ephops-border-default rounded-lg p-4 mt-2 w-80">
+                <p className="text-sm text-ephops-text-primary mb-4">
+                  Are you sure you want to terminate this environment?
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button variant="danger" onClick={handleTerminate}>
+                    Confirm
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Overview Grid */}
-      <div className="grid grid-cols-4 gap-4">
-        <Card>
-          <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
-            Region
-          </p>
-          <p className="text-base font-mono text-ephops-text-primary mt-2">{environment.region}</p>
-        </Card>
+      {/* Overview Grid — only when env loaded */}
+      {environment && (
+        <>
+          <div className="grid grid-cols-4 gap-4">
+            <Card>
+              <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
+                Region
+              </p>
+              <p className="text-base font-mono text-ephops-text-primary mt-2">{environment.region}</p>
+            </Card>
 
-        <Card>
-          <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
-            Instances
-          </p>
-          <p className="text-base font-mono text-ephops-text-primary mt-2">
-            {environment.instanceCount}
-          </p>
-        </Card>
+            <Card>
+              <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
+                Instances
+              </p>
+              <p className="text-base font-mono text-ephops-text-primary mt-2">
+                {environment.instanceCount}
+              </p>
+            </Card>
 
-        <Card>
-          <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
-            Total Cost
-          </p>
-          <p className="text-base font-mono text-ephops-text-primary mt-2">
-            ${environment.cost.toFixed(2)}
-          </p>
-        </Card>
+            <Card>
+              <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
+                Total Cost
+              </p>
+              <p className="text-base font-mono text-ephops-text-primary mt-2">
+                ${environment.cost.toFixed(2)}
+              </p>
+            </Card>
 
-        <Card>
-          <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
-            Created
-          </p>
-          <p className="text-sm text-ephops-text-primary mt-2">
-            {new Date(environment.createdAt).toLocaleDateString()}
-          </p>
-        </Card>
-      </div>
+            <Card>
+              <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
+                Created
+              </p>
+              <p className="text-sm text-ephops-text-primary mt-2">
+                {new Date(environment.createdAt).toLocaleDateString()}
+              </p>
+            </Card>
+          </div>
 
-      {/* Agent Reasoning */}
-      <Card>
-        <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
-          Agent Reasoning
-        </p>
-        <p className="text-sm text-ephops-text-primary mt-2">{environment.agentReasoning}</p>
-      </Card>
+          {/* Agent Reasoning */}
+          <Card>
+            <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary">
+              Agent Reasoning
+            </p>
+            <p className="text-sm text-ephops-text-primary mt-2">{environment.agentReasoning}</p>
+          </Card>
+        </>
+      )}
 
       {/* Action Logs */}
       <div>
         <h2 className="text-lg font-semibold text-ephops-text-primary mb-4">Action Logs</h2>
-        <div className="space-y-2">
-          {logs.map((log) => (
-            <div
-              key={log.id}
-              className="bg-ephops-surface border border-ephops-border-default rounded-lg overflow-hidden"
-            >
-              {/* Collapsed View */}
-              <button
-                onClick={() =>
-                  setExpandedLog(expandedLog === log.id ? null : log.id)
-                }
-                className="w-full px-4 py-3 flex items-center justify-between hover:bg-ephops-elevated transition-colors text-left"
+        {logsError ? (
+          <p className="text-sm text-ephops-state-failed">{logsError}</p>
+        ) : logs.length === 0 ? (
+          <p className="text-sm text-ephops-text-secondary">No action logs found</p>
+        ) : (
+          <div className="space-y-2">
+            {logs.map((log) => (
+              <div
+                key={log.id}
+                className="bg-ephops-surface border border-ephops-border-default rounded-lg overflow-hidden"
               >
-                <div className="flex items-center gap-4 flex-1 min-w-0">
-                  <span className="text-ephops-text-secondary">
-                    {expandedLog === log.id ? '▼' : '▶'}
-                  </span>
-                  <span className="text-xs font-mono text-ephops-text-secondary">
-                    {new Date(log.createdAt).toLocaleTimeString()}
-                  </span>
-                  <span className="px-2 py-1 bg-ephops-elevated rounded text-xs font-medium text-ephops-text-primary">
-                    {log.toolCalled}
-                  </span>
-                  <span className="text-xs text-ephops-text-muted">
-                    {log.durationMs}ms
-                  </span>
-                </div>
-              </button>
-
-              {/* Expanded View */}
-              {expandedLog === log.id && (
-                <div className="border-t border-ephops-border-subtle px-4 py-3 space-y-3 bg-ephops-base">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary mb-1">
-                      Reasoning
-                    </p>
-                    <p className="text-sm text-ephops-text-primary">
-                      {log.agentReasoning}
-                    </p>
+                {/* Collapsed View */}
+                <button
+                  onClick={() =>
+                    setExpandedLog(expandedLog === log.id ? null : log.id)
+                  }
+                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-ephops-elevated transition-colors text-left"
+                >
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    <span className="text-ephops-text-secondary">
+                      {expandedLog === log.id ? '▼' : '▶'}
+                    </span>
+                    <span className="text-xs font-mono text-ephops-text-secondary">
+                      {new Date(log.createdAt).toLocaleTimeString()}
+                    </span>
+                    <span className="px-2 py-1 bg-ephops-elevated rounded text-xs font-medium text-ephops-text-primary">
+                      {log.toolCalled}
+                    </span>
+                    <span className="text-xs text-ephops-text-muted">
+                      {log.durationMs}ms
+                    </span>
                   </div>
+                </button>
 
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary mb-1">
-                      Output
-                    </p>
-                    <pre className="bg-ephops-elevated border border-ephops-border-default rounded p-3 text-xs font-mono text-ephops-text-primary overflow-x-auto">
-                      {JSON.stringify(log.output, null, 2)}
-                    </pre>
+                {/* Expanded View */}
+                {expandedLog === log.id && (
+                  <div className="border-t border-ephops-border-subtle px-4 py-3 space-y-3 bg-ephops-base">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary mb-1">
+                        Reasoning
+                      </p>
+                      <p className="text-sm text-ephops-text-primary">
+                        {log.agentReasoning}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wider text-ephops-text-secondary mb-1">
+                        Output
+                      </p>
+                      <pre className="bg-ephops-elevated border border-ephops-border-default rounded p-3 text-xs font-mono text-ephops-text-primary overflow-x-auto">
+                        {JSON.stringify(log.output, null, 2)}
+                      </pre>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

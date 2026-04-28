@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import type { ConfigType } from '@nestjs/config';
 import {
   AgentDecisionSchema,
   type AgentDecision,
@@ -10,6 +10,7 @@ import {
 } from '../common/constants/finops.constants';
 import { PricingService } from '../pricing/pricing.service';
 import { PolicyRetrieverService } from '../policy/policy-retriever.service';
+import appConfig from '../common/config/app.config';
 
 const BASE_SYSTEM_PROMPT = `You are a FinOps Infrastructure Agent. Your mission is to analyze test environment requests and provision infrastructure at the lowest possible cost. You must NEVER provision resources outside the free tier or low-cost categories (t3.micro, t4g.nano). If a request exceeds capabilities, you must REJECT it and explain why.
 
@@ -52,24 +53,16 @@ export class OllamaService {
   private readonly region: string;
 
   constructor(
-    private readonly configService: ConfigService,
+    @Inject(appConfig.KEY)
+    private readonly config: ConfigType<typeof appConfig>,
     private readonly pricingService: PricingService,
     private readonly policyRetriever: PolicyRetrieverService,
   ) {
-    this.baseUrl = this.configService.get<string>(
-      'app.ollamaBaseUrl',
-      'http://localhost:11434',
-    );
-    this.model = this.configService.get<string>('app.ollamaModel', 'llama3.2');
-    this.fallbackModel = this.configService.get<string>(
-      'app.ollamaFallbackModel',
-      '',
-    );
-    this.timeoutMs = this.configService.get<number>(
-      'app.ollamaTimeoutMs',
-      15000,
-    );
-    this.region = this.configService.get<string>('app.awsRegion', 'us-east-1');
+    this.baseUrl = this.config.ollamaBaseUrl;
+    this.model = this.config.ollamaModel;
+    this.fallbackModel = this.config.ollamaFallbackModel;
+    this.timeoutMs = this.config.ollamaTimeoutMs;
+    this.region = this.config.awsRegion;
   }
 
   async analyzePrompt(

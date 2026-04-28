@@ -13,6 +13,13 @@ async function bootstrap(): Promise<void> {
   // Use Pino logger
   app.useLogger(app.get(Logger));
 
+  // CORS
+  app.enableCors({
+    origin: process.env['CORS_ORIGIN'] ?? 'http://localhost:3000',
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'X-API-KEY'],
+  });
+
   // Global validation pipe
   app.useGlobalPipes(
     new ValidationPipe({

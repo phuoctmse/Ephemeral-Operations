@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable } from '@nestjs/common';
+import { type ConfigType } from '@nestjs/config';
 import { SandboxEnvRepository } from '../sandbox-env/sandbox-env.repository';
 import { ALLOWED_INSTANCE_TYPES } from '../common/constants/finops.constants';
 import {
@@ -7,6 +7,7 @@ import {
   ConcurrencyLimitError,
   TtlExceededError,
 } from '../common/exceptions/finops.exceptions';
+import appConfig from '../common/config/app.config';
 
 @Injectable()
 export class GuardrailsService {
@@ -14,14 +15,12 @@ export class GuardrailsService {
   private readonly maxTtlHours: number;
 
   constructor(
-    private readonly configService: ConfigService,
+    @Inject(appConfig.KEY)
+    private readonly config: ConfigType<typeof appConfig>,
     private readonly sandboxEnvRepo: SandboxEnvRepository,
   ) {
-    this.maxConcurrentEnvs = this.configService.get<number>(
-      'app.maxConcurrentEnvs',
-      2,
-    );
-    this.maxTtlHours = this.configService.get<number>('app.maxTtlHours', 2);
+    this.maxConcurrentEnvs = this.config.maxConcurrentEnvs;
+    this.maxTtlHours = this.config.maxTtlHours;
   }
 
   validateInstanceType(instanceType: string): void {

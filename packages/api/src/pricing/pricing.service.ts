@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import type { ConfigType } from '@nestjs/config';
 import { PricingClient, GetProductsCommand } from '@aws-sdk/client-pricing';
 import { PrismaService } from '../prisma/prisma.service';
 import { PRICING_TABLE } from '../common/constants/finops.constants';
+import appConfig from '../common/config/app.config';
 
 const REGION_TO_LOCATION: Record<string, string> = {
   'us-east-1': 'US East (N. Virginia)',
@@ -48,17 +49,15 @@ export class PricingService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
+    @Inject(appConfig.KEY)
+    private readonly config: ConfigType<typeof appConfig>,
   ) {
     // AWS Price List API is only available in us-east-1 and ap-south-1
     this.pricingClient = new PricingClient({
       region: 'us-east-1',
       credentials: {
-        accessKeyId: this.configService.get<string>('app.awsAccessKeyId', ''),
-        secretAccessKey: this.configService.get<string>(
-          'app.awsSecretAccessKey',
-          '',
-        ),
+        accessKeyId: this.config.awsAccessKeyId,
+        secretAccessKey: this.config.awsSecretAccessKey,
       },
     });
   }

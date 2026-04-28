@@ -1,20 +1,25 @@
 import {
   CanActivate,
   ExecutionContext,
+  Inject,
   Injectable,
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { type ConfigType } from '@nestjs/config';
+import appConfig from '../config/app.config';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
   private readonly logger = new Logger(ApiKeyGuard.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    @Inject(appConfig.KEY)
+    private readonly config: ConfigType<typeof appConfig>,
+  ) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const expectedApiKey = this.configService.get<string>('app.apiKey', '');
+    const expectedApiKey = this.config.apiKey;
     if (!expectedApiKey) {
       this.logger.error('API key authentication is not configured');
       throw new UnauthorizedException(

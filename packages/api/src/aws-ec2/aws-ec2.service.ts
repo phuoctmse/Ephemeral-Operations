@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { type ConfigType } from '@nestjs/config';
 import {
   EC2Client,
   RunInstancesCommand,
@@ -8,28 +8,23 @@ import {
   type _InstanceType,
 } from '@aws-sdk/client-ec2';
 import { EPHOPS_TAG } from '../common/constants/finops.constants';
+import appConfig from '../common/config/app.config';
 
 @Injectable()
 export class AwsEc2Service {
   private readonly logger = new Logger(AwsEc2Service.name);
   private readonly client: EC2Client;
 
-  constructor(private readonly configService: ConfigService) {
-    const region = this.configService.get<string>('app.awsRegion', 'us-east-1');
-    const endpoint = this.configService.get<string>('app.awsEndpoint', '');
-
+  constructor(
+    @Inject(appConfig.KEY)
+    private readonly config: ConfigType<typeof appConfig>,
+  ) {
     this.client = new EC2Client({
-      region,
-      ...(endpoint && { endpoint }),
+      region: this.config.awsRegion,
+      ...(this.config.awsEndpoint && { endpoint: this.config.awsEndpoint }),
       credentials: {
-        accessKeyId: this.configService.get<string>(
-          'app.awsAccessKeyId',
-          'test',
-        ),
-        secretAccessKey: this.configService.get<string>(
-          'app.awsSecretAccessKey',
-          'test',
-        ),
+        accessKeyId: this.config.awsAccessKeyId,
+        secretAccessKey: this.config.awsSecretAccessKey,
       },
     });
   }
