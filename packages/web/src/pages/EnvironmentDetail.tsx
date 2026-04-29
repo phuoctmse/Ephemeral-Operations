@@ -1,11 +1,12 @@
 import { useParams } from 'react-router-dom'
-import { useState, useEffect } from 'react'
-import { Environment, ActionLog } from '@ephops/shared-types'
+import { useState, useEffect, useCallback } from 'react'
+import type { Environment, ActionLog } from '@ephops/shared-types'
 import Card from '../components/Card'
 import StatusBadge from '../components/StatusBadge'
 import Button from '../components/Button'
 import { fetchEnvironmentById, fetchActionLogs, terminateEnvironment } from '../lib/api'
 import { ApiError } from '../lib/ApiError'
+import { formatUsd } from '../lib/formatters'
 
 export default function EnvironmentDetail() {
   const { id } = useParams<{ id: string }>()
@@ -19,37 +20,48 @@ export default function EnvironmentDetail() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [expandedLog, setExpandedLog] = useState<string | null>(null)
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true)
-      const [envResult, logsResult] = await Promise.allSettled([
-        fetchEnvironmentById(id!),
-        fetchActionLogs(id!),
-      ])
-
-      if (envResult.status === 'fulfilled') {
-        setEnvironment(envResult.value)
-      } else {
-        const err = envResult.reason as Error
-        if (err instanceof ApiError && err.status === 404) {
-          setEnvError('Environment not found')
-        } else {
-          setEnvError(err.message || 'Failed to load environment')
-        }
-      }
-
-      if (logsResult.status === 'fulfilled') {
-        setLogs(logsResult.value)
-      } else {
-        const err = logsResult.reason as Error
-        setLogsError(err.message || 'Failed to load action logs')
-      }
-
+  const fetchData = useCallback(async () => {
+    if (!id) {
+      setEnvError('Environment ID is missing')
       setLoading(false)
+      return
     }
 
-    fetchData()
+    setLoading(true)
+    setEnvError(null)
+    setLogsError(null)
+
+    const [envResult, logsResult] = await Promise.allSettled([
+      fetchEnvironmentById(id),
+      fetchActionLogs(id),
+    ])
+
+    if (envResult.status === 'fulfilled') {
+      setEnvironment(envResult.value)
+      setEnvError(null)
+    } else {
+      const err = envResult.reason as Error
+      if (err instanceof ApiError && err.status === 404) {
+        setEnvError('Environment not found')
+      } else {
+        setEnvError(err.message || 'Failed to load environment')
+      }
+    }
+
+    if (logsResult.status === 'fulfilled') {
+      setLogs(logsResult.value)
+      setLogsError(null)
+    } else {
+      const err = logsResult.reason as Error
+      setLogsError(err.message || 'Failed to load action logs')
+    }
+
+    setLoading(false)
   }, [id])
+
+  useEffect(() => {
+    void fetchData()
+  }, [fetchData])
 
   const handleTerminate = async () => {
     setTerminating(true)
@@ -95,7 +107,7 @@ export default function EnvironmentDetail() {
         {!envError && (
           <div className="flex flex-col items-end gap-2">
             <div className="flex gap-3">
-              <Button variant="ghost">Refresh</Button>
+              <Button variant="ghost" onClick={() => void fetchData()}>Refresh</Button>
               <Button
                 variant="danger"
                 disabled={terminating || environment?.state === 'DESTROYED'}
@@ -151,7 +163,7 @@ export default function EnvironmentDetail() {
                 Total Cost
               </p>
               <p className="text-base font-mono text-ephops-text-primary mt-2">
-                ${environment.cost.toFixed(2)}
+                {formatUsd(environment.cost)}
               </p>
             </Card>
 

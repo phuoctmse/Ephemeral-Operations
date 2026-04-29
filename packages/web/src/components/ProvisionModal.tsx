@@ -50,7 +50,7 @@ export default function ProvisionModal({ open, onClose, onSuccess }: ProvisionMo
           <div>
             <label className="block text-sm text-ephops-text-secondary mb-1">Prompt</label>
             <textarea
-              className="w-full bg-ephops-surface border border-ephops-border rounded px-3 py-2 text-sm text-ephops-text-primary resize-none"
+              className="w-full bg-ephops-surface border border-ephops-border-default rounded px-3 py-2 text-sm text-ephops-text-primary resize-none"
               rows={3}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -60,7 +60,7 @@ export default function ProvisionModal({ open, onClose, onSuccess }: ProvisionMo
           <div>
             <label className="block text-sm text-ephops-text-secondary mb-1">Instance Type</label>
             <select
-              className="w-full bg-ephops-surface border border-ephops-border rounded px-3 py-2 text-sm text-ephops-text-primary"
+              className="w-full bg-ephops-surface border border-ephops-border-default rounded px-3 py-2 text-sm text-ephops-text-primary"
               value={instanceType}
               onChange={(e) => setInstanceType(e.target.value as 't3.micro' | 't4g.nano' | '')}
             >
@@ -73,7 +73,7 @@ export default function ProvisionModal({ open, onClose, onSuccess }: ProvisionMo
             <label className="block text-sm text-ephops-text-secondary mb-1">TTL (hours)</label>
             <input
               type="number"
-              className="w-full bg-ephops-surface border border-ephops-border rounded px-3 py-2 text-sm text-ephops-text-primary"
+              className="w-full bg-ephops-surface border border-ephops-border-default rounded px-3 py-2 text-sm text-ephops-text-primary"
               value={ttlHours}
               onChange={(e) => setTtlHours(e.target.value === '' ? '' : Number(e.target.value))}
               min={1}

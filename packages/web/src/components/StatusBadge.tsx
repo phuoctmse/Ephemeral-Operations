@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { EnvironmentState } from '@ephops/shared-types'
+import type { EnvironmentState } from '@ephops/shared-types'
 
 interface StatusBadgeProps {
   state: EnvironmentState

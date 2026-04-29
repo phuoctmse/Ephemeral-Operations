@@ -33,6 +33,17 @@ describe('CleanupWorkerService', () => {
     service = module.get<CleanupWorkerService>(CleanupWorkerService);
   });
 
+  describe('onModuleInit', () => {
+    it('should trigger cleanup reconciliation on startup', async () => {
+      mockSandboxEnvRepo.findExpiredRunning.mockResolvedValue([]);
+
+      service.onModuleInit();
+      await Promise.resolve();
+
+      expect(mockSandboxEnvRepo.findExpiredRunning).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('handleCron', () => {
     it('should do nothing when no expired environments exist', async () => {
       mockSandboxEnvRepo.findExpiredRunning.mockResolvedValue([]);

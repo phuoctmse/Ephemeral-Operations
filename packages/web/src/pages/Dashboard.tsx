@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Environment, Metrics } from '@ephops/shared-types'
+import type { Environment, Metrics } from '@ephops/shared-types'
 import MetricCard from '../components/MetricCard'
 import EnvironmentTable from '../components/EnvironmentTable'
 import Card from '../components/Card'
 import Button from '../components/Button'
 import ProvisionModal from '../components/ProvisionModal'
 import { fetchEnvironments, fetchFinOpsMetrics } from '../lib/api'
+import { formatUsd } from '../lib/formatters'
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
@@ -53,6 +54,19 @@ export default function Dashboard() {
     fetchData()
   }, [])
 
+  const mostExpensiveEnvironment = environments.reduce<Environment | null>((maxEnv, env) => {
+    if (!maxEnv || env.cost > maxEnv.cost) {
+      return env
+    }
+    return maxEnv
+  }, null)
+
+  const last24HoursStart = Date.now() - 24 * 60 * 60 * 1000
+  const recentEnvironments = environments.filter(
+    (env) => new Date(env.createdAt).getTime() >= last24HoursStart,
+  )
+  const recentCost = recentEnvironments.reduce((total, env) => total + env.cost, 0)
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -94,7 +108,7 @@ export default function Dashboard() {
       {/* Metrics Grid */}
       {metrics && (
         <div className="grid grid-cols-4 gap-4">
-          <MetricCard label="Total Cost" value={`${metrics.totalCost.toFixed(2)}`} />
+          <MetricCard label="Total Cost" value={formatUsd(metrics.totalCost)} />
           <MetricCard label="Avg Latency" value={metrics.averageLatency} unit="ms" />
           <MetricCard label="Environments" value={metrics.environmentCount} />
           <MetricCard label="Active Agents" value={metrics.activeAgents} />
@@ -109,7 +123,7 @@ export default function Dashboard() {
             {environments.length} environments across all regions
           </p>
         </div>
-        <EnvironmentTable environments={environments} />
+        <EnvironmentTable environments={environments} onActionComplete={fetchData} />
       </div>
 
       {/* Quick Stats */}
@@ -119,8 +133,14 @@ export default function Dashboard() {
             Most Expensive
           </h3>
           <div className="mt-3 space-y-2">
-            <p className="text-base font-mono text-ephops-text-primary">Production Cluster</p>
-            <p className="text-xs text-ephops-text-secondary">$345.67 · 4 instances</p>
+            <p className="text-base font-mono text-ephops-text-primary">
+              {mostExpensiveEnvironment ? mostExpensiveEnvironment.name : 'No environments'}
+            </p>
+            <p className="text-xs text-ephops-text-secondary">
+              {mostExpensiveEnvironment
+                ? `${formatUsd(mostExpensiveEnvironment.cost)} · ${mostExpensiveEnvironment.instanceCount} instances`
+                : 'No cost data'}
+            </p>
           </div>
         </Card>
 
@@ -129,8 +149,10 @@ export default function Dashboard() {
             Last 24h Activity
           </h3>
           <div className="mt-3">
-            <p className="text-base font-mono text-ephops-text-primary">23 deployments</p>
-            <p className="text-xs text-ephops-text-secondary">$156.34 cost</p>
+            <p className="text-base font-mono text-ephops-text-primary">
+              {recentEnvironments.length} environments
+            </p>
+            <p className="text-xs text-ephops-text-secondary">{formatUsd(recentCost)} cost</p>
           </div>
         </Card>
       </div>

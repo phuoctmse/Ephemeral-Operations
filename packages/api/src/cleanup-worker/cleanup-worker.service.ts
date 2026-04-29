@@ -19,8 +19,15 @@ export class CleanupWorkerService implements OnModuleInit, OnModuleDestroy {
     private readonly actionLogRepo: ActionLogRepository,
   ) {}
 
-  onModuleInit(): void {
-    this.logger.log('Cleanup worker initialized. Running every 5 minutes.');
+  async onModuleInit(): Promise<void> {
+    this.logger.log(
+      'Cleanup worker initialized. Running startup reconciliation and then every 5 minutes.',
+    );
+    await this.runCleanup('startup').catch((error: unknown) => {
+      this.logger.error(
+        `Startup cleanup failed: ${error instanceof Error ? error.message : 'Unknown'}`,
+      );
+    });
   }
 
   onModuleDestroy(): void {
@@ -29,7 +36,15 @@ export class CleanupWorkerService implements OnModuleInit, OnModuleDestroy {
 
   @Cron('*/5 * * * *')
   async handleCron(): Promise<void> {
-    this.logger.log('Running cleanup cron job...');
+    await this.runCleanup('cron');
+  }
+
+  private async runCleanup(source: 'startup' | 'cron'): Promise<void> {
+    this.logger.log(
+      source === 'startup'
+        ? 'Running cleanup reconciliation on startup...'
+        : 'Running cleanup cron job...',
+    );
 
     try {
       const expiredEnvs = await this.sandboxEnvRepo.findExpiredRunning();

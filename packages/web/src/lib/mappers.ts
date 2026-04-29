@@ -5,6 +5,7 @@ export interface SandboxEnvResponseDto {
   id: string
   prompt: string
   status: 'CREATING' | 'RUNNING' | 'FAILED' | 'DESTROYED'
+  resourceId?: string | null
   costIncurred: number
   instanceType: string
   createdAt: string | Date
@@ -42,6 +43,7 @@ export function mapSandboxEnvToEnvironment(dto: SandboxEnvResponseDto): Environm
     id: dto.id,
     name: dto.prompt,
     state: dto.status,
+    resourceId: dto.resourceId ?? null,
     cost: dto.costIncurred,
     region: dto.instanceType,
     instanceCount: 1,

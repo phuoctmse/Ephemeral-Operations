@@ -52,6 +52,4 @@ Dockerfile
 # Local data volumes
 data/
 
-# Test files (excluded from production; api-test target copies them explicitly)
-packages/*/test/
-packages/*/*.spec.ts
+# Test files must remain in the build context for Docker test targets
