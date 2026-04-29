@@ -23,28 +23,124 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           HUSKY: 0
 
       - name: Generate Prisma Client
-        run: npx prisma generate
+        run: pnpm exec prisma generate --schema=prisma/schema.prisma
 
-      - name: Verify lint
-        run: npm run lint:ci
+      - name: Lint — api
+        run: pnpm --filter @ephops/api run lint:ci
 
-      - name: Run unit tests
-        run: npm run test -- --ci --runInBand
+      - name: Lint — web
+        run: pnpm --filter @ephops/web run lint
 
-      - name: Build application
-        run: npm run build
+      - name: Run unit tests — api
+        run: pnpm --filter @ephops/api exec jest --ci --runInBand --passWithNoTests
+
+      - name: Build — shared-types
+        run: echo "shared-types is source-only, no build step needed"
+
+      - name: Build — api
+        run: pnpm --filter @ephops/api run build
+
+      - name: Build — web
+        run: pnpm --filter @ephops/web run build
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality-gates
+
+    services:
+      postgresql:
+        image: postgres:18-alpine3.23
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ${{ secrets.E2E_DB_PASSWORD }}
+          POSTGRES_DB: ephops_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ephops_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      floci:
+        image: hectorvent/floci:latest
+        ports:
+          - 4566:4566
+        env:
+          FLOCI_STORAGE_MODE: memory
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          HUSKY: 0
+
+      - name: Generate Prisma Client
+        run: pnpm exec prisma generate --schema=prisma/schema.prisma
+
+      - name: Wait for floci to be ready
+        run: |
+          echo "Waiting for floci on port 4566..."
+          for i in $(seq 1 30); do
+            if bash -c 'echo > /dev/tcp/localhost/4566' 2>/dev/null; then
+              echo "floci is up (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: not ready, waiting 2s..."
+            sleep 2
+          done
+          echo "floci did not become ready in time" && exit 1
+
+      - name: Run database migrations
+        run: pnpm exec prisma migrate deploy --schema=prisma/schema.prisma
+        env:
+          DATABASE_URL: postgresql://postgres:${{ secrets.E2E_DB_PASSWORD }}@localhost:5432/ephops_test
+
+      - name: Run E2E tests
+        run: pnpm --filter @ephops/api run test:e2e
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:${{ secrets.E2E_DB_PASSWORD }}@localhost:5432/ephops_test
+          API_KEY: ${{ secrets.E2E_API_KEY }}
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT: http://localhost:4566
+          OLLAMA_BASE_URL: http://localhost:11434
+          OLLAMA_MODEL: qwen2.5:1.5b
 
   dependency-security:
     name: Dependency Security Gate
@@ -55,25 +151,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           HUSKY: 0
 
       - name: Audit runtime dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: pnpm audit --prod --audit-level=high
 
   container-security:
     name: Container Build and Scan
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     needs: quality-gates
+
+    strategy:
+      matrix:
+        include:
+          - package: api
+            dockerfile: packages/api/Dockerfile
+            image: ephops-api
+          - package: web
+            dockerfile: packages/web/Dockerfile
+            image: ephops-web
 
     steps:
       - name: Checkout
@@ -82,18 +193,21 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Build image
+      - name: Build ${{ matrix.package }} image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: ./Dockerfile
-          tags: ephops:${{ github.sha }}
+          file: ${{ matrix.dockerfile }}
+          target: production
+          tags: ${{ matrix.image }}:${{ github.sha }}
           load: true
+          cache-from: type=gha,scope=${{ matrix.package }}
+          cache-to: type=gha,scope=${{ matrix.package }},mode=max
 
-      - name: Scan image with Trivy
+      - name: Scan ${{ matrix.package }} image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ephops:${{ github.sha }}
+          image-ref: ${{ matrix.image }}:${{ github.sha }}
           ignorefile: .trivyignore
           format: table
           severity: HIGH,CRITICAL

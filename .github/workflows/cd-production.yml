@@ -3,8 +3,8 @@ name: CD - Production Promotion (ECS)
 on:
   workflow_dispatch:
     inputs:
-      staging_image_tag:
-        description: 'Staging image tag to promote (e.g., staging-abc123...)'
+      staging_sha:
+        description: 'Commit SHA from staging (e.g., abc1234... full 40-char)'
         required: true
       approval_note:
         description: 'Release notes or approval reason'
@@ -26,15 +26,19 @@ jobs:
     timeout-minutes: 10
     outputs:
       deployment_id: ${{ steps.create-deployment.outputs.deployment_id }}
+      staging_sha:   ${{ steps.validate.outputs.staging_sha }}
 
     steps:
-      - name: Validate image tag
+      - name: Validate SHA input
+        id: validate
         run: |
-          if [[ ! "${{ github.event.inputs.staging_image_tag }}" =~ ^staging-[a-f0-9]{40}$ ]]; then
-            echo "::error::Invalid staging image tag. Expected: staging-<commit-sha>"
+          SHA="${{ github.event.inputs.staging_sha }}"
+          if [[ ! "$SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Invalid SHA. Expected full 40-char commit SHA."
             exit 1
           fi
-          echo "✅ Image tag validated: ${{ github.event.inputs.staging_image_tag }}"
+          echo "✅ SHA validated: $SHA"
+          echo "staging_sha=${SHA}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub deployment
         id: create-deployment
@@ -46,16 +50,75 @@ jobs:
               repo: context.repo.repo,
               ref: context.ref,
               environment: 'production',
-              description: 'EphOps production: ${{ github.event.inputs.staging_image_tag }}',
+              description: 'EphOps production: staging-${{ github.event.inputs.staging_sha }}',
               auto_merge: false,
             });
             core.setOutput('deployment_id', deployment.data.id);
 
+  promote-images:
+    name: Promote — ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: pre-deployment-check
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      matrix:
+        package: [api, web]
+
+    outputs:
+      api_prod_uri:    ${{ steps.promote.outputs.prod_image_uri }}
+      api_prod_digest: ${{ steps.digest.outputs.prod_digest }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Promote staging image to production — ${{ matrix.package }}
+        id: promote
+        run: |
+          SHA="${{ needs.pre-deployment-check.outputs.staging_sha }}"
+          AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY="${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com"
+          ECR_REPO="ephops-${{ matrix.package }}"
+          PROD_TAG="prod-${SHA}"
+          PROD_URI="${ECR_REGISTRY}/${ECR_REPO}:${PROD_TAG}"
+          STAGING_URI="${ECR_REGISTRY}/${ECR_REPO}:staging-${SHA}"
+
+          aws ecr get-login-password --region us-east-1 | \
+            docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+
+          docker pull "${STAGING_URI}"
+          docker tag  "${STAGING_URI}" "${PROD_URI}"
+          docker tag  "${STAGING_URI}" "${ECR_REGISTRY}/${ECR_REPO}:prod-latest"
+          docker push "${PROD_URI}"
+          docker push "${ECR_REGISTRY}/${ECR_REPO}:prod-latest"
+
+          echo "prod_image_uri=${PROD_URI}" >> $GITHUB_OUTPUT
+          echo "prod_tag=${PROD_TAG}"       >> $GITHUB_OUTPUT
+
+      - name: Capture image digest
+        id: digest
+        run: |
+          DIGEST=$(aws ecr describe-images \
+            --repository-name ephops-${{ matrix.package }} \
+            --image-ids imageTag=${{ steps.promote.outputs.prod_tag }} \
+            --region us-east-1 \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          echo "prod_digest=${DIGEST}" >> $GITHUB_OUTPUT
+
   production-deploy:
-    name: Deploy to Production (ECS Fargate)
+    name: Deploy to Production (ECS)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: pre-deployment-check
+    needs: [pre-deployment-check, promote-images]
     environment: production
     permissions:
       contents: write
@@ -72,117 +135,126 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Retag staging image as production
-        id: retag
+      - name: Resolve ECR registry
+        id: ecr
         run: |
           AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-          ECR_REGISTRY="${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com"
-          ECR_REPO="ephops"
-          PROD_TAG="prod-${{ github.event.inputs.staging_image_tag }}"
-          PROD_IMAGE_URI="${ECR_REGISTRY}/${ECR_REPO}:${PROD_TAG}"
+          SHA="${{ needs.pre-deployment-check.outputs.staging_sha }}"
+          echo "registry=${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com" >> $GITHUB_OUTPUT
+          echo "api_uri=${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/ephops-api:prod-${SHA}" >> $GITHUB_OUTPUT
+          echo "web_uri=${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/ephops-web:prod-${SHA}" >> $GITHUB_OUTPUT
 
-          aws ecr get-login-password --region us-east-1 | \
-            docker login --username AWS --password-stdin "${ECR_REGISTRY}"
-          docker pull "${ECR_REGISTRY}/${ECR_REPO}:${{ github.event.inputs.staging_image_tag }}"
-          docker tag  "${ECR_REGISTRY}/${ECR_REPO}:${{ github.event.inputs.staging_image_tag }}" "${PROD_IMAGE_URI}"
-          docker tag  "${ECR_REGISTRY}/${ECR_REPO}:${{ github.event.inputs.staging_image_tag }}" "${ECR_REGISTRY}/${ECR_REPO}:prod-latest"
-          docker push "${PROD_IMAGE_URI}"
-          docker push "${ECR_REGISTRY}/${ECR_REPO}:prod-latest"
-
-          echo "prod_image_uri=${PROD_IMAGE_URI}" >> $GITHUB_OUTPUT
-          echo "prod_tag=${PROD_TAG}"             >> $GITHUB_OUTPUT
-
-      - name: Capture production image digest
-        id: image-meta
-        run: |
-          DIGEST=$(aws ecr describe-images \
-            --repository-name ephops \
-            --image-ids imageTag=${{ steps.retag.outputs.prod_tag }} \
-            --region us-east-1 \
-            --query 'imageDetails[0].imageDigest' \
-            --output text)
-
-          echo "prod_digest=${DIGEST}" >> $GITHUB_OUTPUT
-
-      - name: Render ECS task definition
-        id: render-task-def
+      # ── API service ──────────────────────────────────────────────
+      - name: Render ECS task definition — api
+        id: render-api
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition-family: ephops-prod
-          container-name: app
-          image: ${{ steps.retag.outputs.prod_image_uri }}
+          task-definition-family: ephops-prod-api
+          container-name: api
+          image: ${{ steps.ecr.outputs.api_uri }}
 
-      - name: Deploy to ECS production
-        id: deploy
+      - name: Deploy api to ECS production
+        id: deploy-api
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          task-definition: ${{ steps.render-api.outputs.task-definition }}
           cluster: ephops-prod-cluster
-          service: ephops-prod-service
+          service: ephops-prod-api-service
           wait-for-service-stability: true
 
-      - name: Smoke tests
-        id: smoke-tests
-        run: |
-          BASE="${{ secrets.PROD_HEALTH_URL }}"
+      # ── Web service ──────────────────────────────────────────────
+      - name: Render ECS task definition — web
+        id: render-web
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition-family: ephops-prod-web
+          container-name: web
+          image: ${{ steps.ecr.outputs.web_uri }}
 
-          echo "--- Test 1: Liveness ---"
+      - name: Deploy web to ECS production
+        id: deploy-web
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-web.outputs.task-definition }}
+          cluster: ephops-prod-cluster
+          service: ephops-prod-web-service
+          wait-for-service-stability: true
+
+      # ── Smoke tests ──────────────────────────────────────────────
+      - name: Smoke tests — api
+        id: smoke-api
+        run: |
+          BASE="${{ secrets.PROD_API_URL }}"
+
           for i in $(seq 1 10); do
             curl -sf "$BASE/health/live" && break
-            [ $i -lt 10 ] && sleep 3 || { echo "::error::Liveness check failed"; exit 1; }
+            [ $i -lt 10 ] && sleep 3 || { echo "::error::API liveness failed"; exit 1; }
           done
 
-          echo "--- Test 2: Readiness ---"
           for i in $(seq 1 10); do
             curl -sf "$BASE/health/ready" && break
-            [ $i -lt 10 ] && sleep 3 || { echo "::error::Readiness check failed"; exit 1; }
+            [ $i -lt 10 ] && sleep 3 || { echo "::error::API readiness failed"; exit 1; }
           done
 
-          echo "--- Test 3 & 4: Health + Database ---"
           HEALTH=$(curl -sf "$BASE/health")
           echo "$HEALTH" | grep -q '"status":"ok"'   || { echo "::error::Health status not ok"; exit 1; }
           echo "$HEALTH" | grep -q '"database":"ok"' || { echo "::error::Database health failed"; exit 1; }
 
-          echo "--- Test 5: Response time < 1s ---"
           TIME=$(curl -sf -o /dev/null -w "%{time_total}" "$BASE/health")
           awk "BEGIN{exit !($TIME < 1.0)}" || echo "::warning::Response time high: ${TIME}s"
 
-          echo "--- Test 6: Sandbox endpoint ---"
           CODE=$(curl -sf -o /dev/null -w "%{http_code}" "$BASE/sandbox" || true)
           echo "$CODE" | grep -qE "^(200|401)$" || { echo "::error::Sandbox returned $CODE"; exit 1; }
 
-          echo "::notice::All smoke tests passed"
-
-      - name: Rollback if smoke tests failed
-        if: failure()
-        id: rollback
+      - name: Smoke tests — web
+        id: smoke-web
         run: |
-          echo "::error::Smoke tests failed — initiating automatic rollback"
+          BASE="${{ secrets.PROD_WEB_URL }}"
+
+          for i in $(seq 1 10); do
+            curl -sf "$BASE/health" && break
+            [ $i -lt 10 ] && sleep 3 || { echo "::error::Web health failed"; exit 1; }
+          done
+
+          CODE=$(curl -sf -o /dev/null -w "%{http_code}" "$BASE/")
+          [ "$CODE" = "200" ] || { echo "::error::Web root returned $CODE"; exit 1; }
+
+      # ── Rollback on failure ──────────────────────────────────────
+      - name: Rollback api if smoke tests failed
+        if: failure()
+        id: rollback-api
+        run: |
           PREV=$(aws ecs list-task-definition-revisions \
-            --family-prefix ephops-prod \
+            --family-prefix ephops-prod-api \
             --region us-east-1 \
             --sort DESCENDING \
             --query 'taskDefinitionArns[1]' \
             --output text)
+          [ -z "$PREV" ] || [ "$PREV" = "None" ] && { echo "::error::No previous api task def"; exit 1; }
+          aws ecs update-service --cluster ephops-prod-cluster --service ephops-prod-api-service \
+            --task-definition "$PREV" --region us-east-1
+          aws ecs wait services-stable --cluster ephops-prod-cluster \
+            --services ephops-prod-api-service --region us-east-1
+          echo "::notice::API rolled back to $PREV"
 
-          if [ -z "$PREV" ] || [ "$PREV" = "None" ]; then
-            echo "::error::No previous task definition found"
-            exit 1
-          fi
+      - name: Rollback web if smoke tests failed
+        if: failure()
+        id: rollback-web
+        run: |
+          PREV=$(aws ecs list-task-definition-revisions \
+            --family-prefix ephops-prod-web \
+            --region us-east-1 \
+            --sort DESCENDING \
+            --query 'taskDefinitionArns[1]' \
+            --output text)
+          [ -z "$PREV" ] || [ "$PREV" = "None" ] && { echo "::error::No previous web task def"; exit 1; }
+          aws ecs update-service --cluster ephops-prod-cluster --service ephops-prod-web-service \
+            --task-definition "$PREV" --region us-east-1
+          aws ecs wait services-stable --cluster ephops-prod-cluster \
+            --services ephops-prod-web-service --region us-east-1
+          echo "::notice::Web rolled back to $PREV"
 
-          aws ecs update-service \
-            --cluster ephops-prod-cluster \
-            --service ephops-prod-service \
-            --task-definition "$PREV" \
-            --region us-east-1
-          aws ecs wait services-stable \
-            --cluster ephops-prod-cluster \
-            --services ephops-prod-service \
-            --region us-east-1
-          echo "rollback_task_def=${PREV}" >> $GITHUB_OUTPUT
-          echo "::notice::Rollback complete — service restored to $PREV"
-          exit 1
-
+      # ── Deployment status ────────────────────────────────────────
       - name: Update deployment status (success)
         if: success()
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
@@ -194,7 +266,7 @@ jobs:
               deployment_id: ${{ needs.pre-deployment-check.outputs.deployment_id }},
               state: 'success',
               description: 'Production deployment successful',
-              environment_url: '${{ secrets.PROD_HEALTH_URL }}/health',
+              environment_url: '${{ secrets.PROD_WEB_URL }}',
             });
 
       - name: Update deployment status (failure)
@@ -214,25 +286,25 @@ jobs:
         if: success()
         uses: softprops/action-gh-release@c062e08bd532815e2082a85261ab4007cf39e221 # v1
         with:
-          tag_name: rel-${{ steps.retag.outputs.prod_tag }}
+          tag_name: rel-prod-${{ needs.pre-deployment-check.outputs.staging_sha }}
           body: |
-            **Image**: ${{ steps.retag.outputs.prod_image_uri }}
-            **Image Digest**: ${{ steps.image-meta.outputs.prod_digest }}
-            **Promoted from**: ${{ github.event.inputs.staging_image_tag }}
+            **API Image**: ${{ steps.ecr.outputs.api_uri }}
+            **Web Image**: ${{ steps.ecr.outputs.web_uri }}
+            **Promoted from SHA**: ${{ needs.pre-deployment-check.outputs.staging_sha }}
             **Approval note**: ${{ github.event.inputs.approval_note }}
             **Triggered by**: ${{ github.actor }}
 
       - name: Release evidence summary
         if: always()
         run: |
+          SHA="${{ needs.pre-deployment-check.outputs.staging_sha }}"
           {
             echo "## Production Release Evidence"
-            echo "- Commit SHA: ${{ github.sha }}"
-            echo "- Source Staging Tag: ${{ github.event.inputs.staging_image_tag }}"
-            echo "- Production Tag: ${{ steps.retag.outputs.prod_tag }}"
-            echo "- Production Image URI: ${{ steps.retag.outputs.prod_image_uri }}"
-            echo "- Production Image Digest: ${{ steps.image-meta.outputs.prod_digest }}"
-            echo "- Target Environment: production"
-            echo "- Smoke Test Result: ${{ steps.smoke-tests.outcome }}"
-            echo "- Rollback Result: ${{ steps.rollback.outcome || 'not-triggered' }}"
+            echo "- Commit SHA: ${SHA}"
+            echo "- API Image: ${{ steps.ecr.outputs.api_uri }}"
+            echo "- Web Image: ${{ steps.ecr.outputs.web_uri }}"
+            echo "- API Smoke Tests: ${{ steps.smoke-api.outcome }}"
+            echo "- Web Smoke Tests: ${{ steps.smoke-web.outcome }}"
+            echo "- API Rollback: ${{ steps.rollback-api.outcome || 'not-triggered' }}"
+            echo "- Web Rollback: ${{ steps.rollback-web.outcome || 'not-triggered' }}"
           } >> "$GITHUB_STEP_SUMMARY"

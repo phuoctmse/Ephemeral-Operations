@@ -3,6 +3,12 @@ name: CD - Emergency Rollback (ECS)
 on:
   workflow_dispatch:
     inputs:
+      service:
+        description: 'Service to rollback'
+        required: true
+        type: choice
+        options: [all, api, web]
+        default: all
       reason:
         description: 'Reason for rollback'
         required: true
@@ -19,7 +25,7 @@ concurrency:
 
 jobs:
   execute-rollback:
-    name: Execute Production Rollback (ECS)
+    name: Rollback — ${{ github.event.inputs.service }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -41,53 +47,69 @@ jobs:
               repo: context.repo.repo,
               ref: context.ref,
               environment: 'production',
-              description: 'Emergency rollback: ${{ github.event.inputs.reason }}',
+              description: 'Emergency rollback (${{ github.event.inputs.service }}): ${{ github.event.inputs.reason }}',
               auto_merge: false,
             });
             core.setOutput('deployment_id', deployment.data.id);
 
-      - name: Rollback to previous task definition
-        id: rollback
+      - name: Rollback api service
+        id: rollback-api
+        if: ${{ github.event.inputs.service == 'all' || github.event.inputs.service == 'api' }}
         run: |
-          echo "🔙 Emergency rollback — reason: ${{ github.event.inputs.reason }}"
-
+          echo "🔙 Rolling back api — reason: ${{ github.event.inputs.reason }}"
           PREV=$(aws ecs list-task-definition-revisions \
-            --family-prefix ephops-prod \
+            --family-prefix ephops-prod-api \
             --region us-east-1 \
             --sort DESCENDING \
             --query 'taskDefinitionArns[1]' \
             --output text)
+          [ -z "$PREV" ] || [ "$PREV" = "None" ] && { echo "::error::No previous api task def"; exit 1; }
+          aws ecs update-service --cluster ephops-prod-cluster --service ephops-prod-api-service \
+            --task-definition "$PREV" --region us-east-1
+          aws ecs wait services-stable --cluster ephops-prod-cluster \
+            --services ephops-prod-api-service --region us-east-1
+          echo "prev_task_def=${PREV}" >> $GITHUB_OUTPUT
+          echo "::notice::API rolled back to $PREV"
 
-          if [ -z "$PREV" ] || [ "$PREV" = "None" ]; then
-            echo "::error::No previous task definition found"
-            exit 1
-          fi
-
-          echo "Rolling back to: $PREV"
-          aws ecs update-service \
-            --cluster ephops-prod-cluster \
-            --service ephops-prod-service \
-            --task-definition "$PREV" \
-            --region us-east-1
-
-          aws ecs wait services-stable \
-            --cluster ephops-prod-cluster \
-            --services ephops-prod-service \
-            --region us-east-1
-
-          echo "prev_task_def=$PREV" >> $GITHUB_OUTPUT
-          echo "::notice::Rollback complete — service restored to $PREV"
+      - name: Rollback web service
+        id: rollback-web
+        if: ${{ github.event.inputs.service == 'all' || github.event.inputs.service == 'web' }}
+        run: |
+          echo "🔙 Rolling back web — reason: ${{ github.event.inputs.reason }}"
+          PREV=$(aws ecs list-task-definition-revisions \
+            --family-prefix ephops-prod-web \
+            --region us-east-1 \
+            --sort DESCENDING \
+            --query 'taskDefinitionArns[1]' \
+            --output text)
+          [ -z "$PREV" ] || [ "$PREV" = "None" ] && { echo "::error::No previous web task def"; exit 1; }
+          aws ecs update-service --cluster ephops-prod-cluster --service ephops-prod-web-service \
+            --task-definition "$PREV" --region us-east-1
+          aws ecs wait services-stable --cluster ephops-prod-cluster \
+            --services ephops-prod-web-service --region us-east-1
+          echo "prev_task_def=${PREV}" >> $GITHUB_OUTPUT
+          echo "::notice::Web rolled back to $PREV"
 
       - name: Verify health after rollback
         id: verify
         run: |
-          BASE="${{ secrets.PROD_HEALTH_URL }}"
-          for i in $(seq 1 10); do
-            curl -sf "$BASE/health" && break
-            [ $i -lt 10 ] && sleep 5 || { echo "::warning::Health check failed after rollback"; exit 1; }
-          done
+          if [[ "${{ github.event.inputs.service }}" == "all" || "${{ github.event.inputs.service }}" == "api" ]]; then
+            echo "--- Verify API ---"
+            for i in $(seq 1 10); do
+              curl -sf "${{ secrets.PROD_API_URL }}/health" && break
+              [ $i -lt 10 ] && sleep 5 || { echo "::warning::API health check failed after rollback"; exit 1; }
+            done
+          fi
 
-      - name: Create deployment status
+          if [[ "${{ github.event.inputs.service }}" == "all" || "${{ github.event.inputs.service }}" == "web" ]]; then
+            echo "--- Verify Web ---"
+            for i in $(seq 1 10); do
+              curl -sf "${{ secrets.PROD_WEB_URL }}/health" && break
+              [ $i -lt 10 ] && sleep 5 || { echo "::warning::Web health check failed after rollback"; exit 1; }
+            done
+          fi
+
+      - name: Update deployment status
         if: always()
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
@@ -98,10 +120,8 @@ jobs:
               repo: context.repo.repo,
               deployment_id: ${{ steps.create-deployment.outputs.deployment_id }},
               state: success ? 'success' : 'failure',
-              description: success
-                ? 'Rollback successful'
-                : 'Rollback executed but health check failed',
-              environment_url: '${{ secrets.PROD_HEALTH_URL }}/health',
+              description: success ? 'Rollback successful' : 'Rollback executed but health check failed',
+              environment_url: '${{ secrets.PROD_WEB_URL }}',
             });
 
       - name: Rollback evidence summary
@@ -109,11 +129,12 @@ jobs:
         run: |
           {
             echo "## Rollback Evidence"
-            echo "- Commit SHA: ${{ github.sha }}"
-            echo "- Target Environment: production"
+            echo "- Service: ${{ github.event.inputs.service }}"
             echo "- Reason: ${{ github.event.inputs.reason }}"
-            echo "- Rolled Back Task Definition: ${{ steps.rollback.outputs.prev_task_def || 'unknown' }}"
-            echo "- Health Verify Result: ${{ steps.verify.outcome }}"
+            echo "- Triggered by: ${{ github.actor }}"
+            echo "- API Task Def: ${{ steps.rollback-api.outputs.prev_task_def || 'skipped' }}"
+            echo "- Web Task Def: ${{ steps.rollback-web.outputs.prev_task_def || 'skipped' }}"
+            echo "- Health Verify: ${{ steps.verify.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Alert on failure
@@ -125,6 +146,6 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: 1,
-              body: `⚠️ **PRODUCTION ALERT**: Rollback failed!\n- Reason: ${{ github.event.inputs.reason }}\n- Triggered by: @${{ github.actor }}`
+              body: `⚠️ **PRODUCTION ALERT**: Rollback failed!\n- Service: ${{ github.event.inputs.service }}\n- Reason: ${{ github.event.inputs.reason }}\n- Triggered by: @${{ github.actor }}`
             });
             core.setFailed('Rollback failed — manual intervention required');

@@ -1,47 +1,55 @@
-# .dockerignore for NestJS + Prisma Application
-# EphOps
+# .dockerignore — EphOps Monorepo
 
 # Version control
 .git/
 .github/
 .gitignore
 
-# Dependencies (installed in container)
+# All node_modules (installed inside container)
 node_modules/
+packages/*/node_modules/
 
-# Build outputs (built in container)
+# Build outputs (built inside container)
 dist/
+packages/*/dist/
+packages/web/dist/
 
 # Environment files (injected at runtime)
 .env
 .env.*
 !.env.example
 
-# Development files
+# Dev tooling
 .vscode/
 .idea/
+.husky/
+.agent/
+.agents/
+.kiro/
+
+# Logs & coverage
 *.log
 coverage/
+packages/*/coverage/
 .eslintcache
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
-# Documentation
+# Docs
 *.md
-!.github/
+DESIGN.md
+PRODUCT.md
+project-spec.md
 
-# Deployment configs (not needed in image)
+# Docker files themselves
 docker-compose.yml
 compose.yml
 Dockerfile
 .dockerignore
 
-# Prisma local data
+# Local data volumes
 data/
 
-# Husky hooks (CI-only, not needed in image)
-.husky/
-
-# Test files are intentionally included so Docker test target can run Jest coverage.
+# Test files must remain in the build context for Docker test targets

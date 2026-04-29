@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  @apply border-ephops-border-default;
+}
+
+body {
+  @apply bg-ephops-base text-ephops-text-primary;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+code, pre {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-ephops-surface;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-ephops-border-default rounded-md;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-ephops-border-subtle;
+}
