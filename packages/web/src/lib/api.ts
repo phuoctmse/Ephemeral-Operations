@@ -19,9 +19,17 @@ export interface ProvisionInput {
   ttlHours?: number
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// Default timeout for quick read operations (list, fetch by id, metrics).
+const DEFAULT_TIMEOUT_MS = 10_000
+
+// Provision involves two sequential LLM calls (intent extraction + decision)
+// plus an EC2 API call. Each LLM call can take up to 15 s (OLLAMA_TIMEOUT_MS),
+// so the frontend must wait long enough for the full pipeline to complete.
+const PROVISION_TIMEOUT_MS = 90_000
+
+async function request<T>(path: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 10_000)
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const response = await fetch(`${BASE_URL}${path}`, {
@@ -68,10 +76,11 @@ export async function fetchEnvironmentById(id: string): Promise<Environment> {
 }
 
 export async function provisionEnvironment(input: ProvisionInput): Promise<Environment> {
-  const data = await request<SandboxEnvResponseDto>('/sandbox', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  })
+  const data = await request<SandboxEnvResponseDto>(
+    '/sandbox',
+    { method: 'POST', body: JSON.stringify(input) },
+    PROVISION_TIMEOUT_MS,
+  )
   return mapSandboxEnvToEnvironment(data)
 }
 

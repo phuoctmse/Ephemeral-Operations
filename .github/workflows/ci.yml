@@ -140,7 +140,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT: http://localhost:4566
           OLLAMA_BASE_URL: http://localhost:11434
-          OLLAMA_MODEL: qwen2.5:1.5b
+          OLLAMA_MODEL: qwen2.5:7b
 
   dependency-security:
     name: Dependency Security Gate

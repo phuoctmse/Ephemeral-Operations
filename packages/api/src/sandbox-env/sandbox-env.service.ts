@@ -17,7 +17,11 @@ import {
   MAX_TOTAL_EXPECTED_COST,
   PRICING_TABLE,
 } from '../common/constants/finops.constants';
-import { ProvisioningError } from '../common/exceptions/finops.exceptions';
+import {
+  ProvisioningError,
+  UnrecognizedInstanceTypeError,
+  UnresolvableTtlError,
+} from '../common/exceptions/finops.exceptions';
 import { PricingService } from '../pricing/pricing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import appConfig from '../common/config/app.config';
@@ -39,11 +43,71 @@ export class SandboxEnvService {
   ) {}
 
   async provision(dto: CreateSandboxEnvDto) {
-    const instanceType = dto.instanceType ?? 't3.micro';
     const maxTtl = this.config.maxTtlHours;
-    const requestedTtl = dto.ttlHours ?? 1;
-    const ttlHours = Math.min(requestedTtl, maxTtl);
     const region = this.config.awsRegion;
+
+    let instanceType: string;
+    let ttlHours: number;
+    let intentExtractionLog: Record<string, unknown> | null = null;
+
+    if (dto.instanceType) {
+      instanceType = dto.instanceType;
+      ttlHours = Math.min(dto.ttlHours ?? 1, maxTtl);
+    } else {
+      const llmIntentResult = await this.llmService.extractIntent(dto.prompt);
+      const { intent, durationMs, fallbackUsed } = llmIntentResult;
+
+      intentExtractionLog = {
+        instanceType: intent.instanceType,
+        ttlHours: intent.ttlHours,
+        confidence: intent.confidence,
+        rawRequest: intent.rawRequest,
+        durationMs,
+        fallbackUsed,
+      };
+
+      try {
+        this.guardrailsService.validateIntent(intent);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Unknown guardrails error';
+        this.logger.warn(`Intent validation blocked request: ${message}`);
+
+        const blockedEnv = await this.repo.create({
+          prompt: dto.prompt,
+          instanceType: intent.instanceType ?? 'unknown',
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          hourlyCost: 0,
+        });
+        await this.repo.updateToFailed(blockedEnv.id, message);
+        await this.actionLogRepo.create({
+          envId: blockedEnv.id,
+          agentReasoning: message,
+          toolCalled: 'guardrails_intent_block',
+          output: JSON.stringify({
+            reason:
+              error instanceof UnrecognizedInstanceTypeError
+                ? 'unrecognized_instance_type'
+                : error instanceof UnresolvableTtlError
+                  ? 'unresolvable_ttl'
+                  : 'intent_validation_failed',
+            intentExtractionLog,
+          }),
+        });
+
+        throw new BadRequestException({
+          error:
+            error instanceof UnrecognizedInstanceTypeError
+              ? 'unrecognized_instance_type'
+              : 'unresolvable_ttl',
+          message,
+        });
+      }
+
+      // At this point intent is valid — safe to unwrap
+      instanceType = intent.instanceType!;
+      ttlHours = Math.min(intent.ttlHours!, maxTtl);
+    }
 
     let hourlyCost: number;
     try {
@@ -52,13 +116,13 @@ export class SandboxEnvService {
         region,
       );
     } catch {
-      hourlyCost = PRICING_TABLE[instanceType] ?? 0;
+      hourlyCost =
+        PRICING_TABLE[instanceType as keyof typeof PRICING_TABLE] ?? 0;
     }
     const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
     const totalExpected = Number((hourlyCost * ttlHours).toFixed(6));
     const policyCompliant = this.isPolicyCompliant(ttlHours, totalExpected);
 
-    // Guardrails: instance type check (no DB needed, safe to run outside transaction)
     try {
       this.guardrailsService.validateInstanceType(instanceType);
     } catch (error) {
@@ -66,7 +130,6 @@ export class SandboxEnvService {
         error instanceof Error ? error.message : 'Unknown guardrails error';
       this.logger.warn(`Guardrails blocked request: ${message}`);
 
-      // Persist guardrails block — create a minimal env record to attach the log
       const blockedEnv = await this.repo.create({
         prompt: dto.prompt,
         instanceType,
@@ -91,7 +154,6 @@ export class SandboxEnvService {
       });
     }
 
-    // Guardrails: concurrency check + env creation in a single transaction to prevent race condition
     const env = await this.prisma
       .$transaction(async (tx) => {
         const maxConcurrent = this.config.maxConcurrentEnvs;
@@ -116,7 +178,6 @@ export class SandboxEnvService {
         if (error instanceof Error && error.name === 'ConcurrencyLimitError') {
           this.logger.warn(`Guardrails blocked request: ${error.message}`);
 
-          // Persist concurrency block — needs a separate env record
           const blockedEnv = await this.repo.create({
             prompt: dto.prompt,
             instanceType,
@@ -146,10 +207,9 @@ export class SandboxEnvService {
       });
 
     try {
-      // Ask LLM for decision (with latency tracking)
       const llmResult = await this.llmService.analyzePrompt(
         dto.prompt,
-        instanceType,
+        instanceType as 't3.micro' | 't4g.nano',
         ttlHours,
       );
       const { decision, durationMs, fallbackUsed } = llmResult;
@@ -165,10 +225,10 @@ export class SandboxEnvService {
           ? {
               ...decision,
               decision: 'APPROVE' as const,
-              reasoning: `Provision approved. Policy check passed for ${instanceType} at ${ttlHours}h with estimated total $${totalExpected.toFixed(4)}.`,
+              reasoning: `Provision approved. Policy check passed for ${instanceType} at ${ttlHours}h with estimated total ${totalExpected.toFixed(4)}.`,
               llmReasoning: decision.reasoning,
               config: {
-                instanceType,
+                instanceType: instanceType as 't3.micro' | 't4g.nano',
                 ttlHours,
                 region,
               },
@@ -182,10 +242,10 @@ export class SandboxEnvService {
         : {
             ...decision,
             decision: 'REJECT' as const,
-            reasoning: `Provision rejected by guardrails. Allowed instance types are t3.micro/t4g.nano, TTL must stay within 0.5-${maxTtl}h, and total expected cost must stay at or below $${MAX_TOTAL_EXPECTED_COST.toFixed(3)}.`,
+            reasoning: `Provision rejected by guardrails. Allowed instance types are t3.micro/t4g.nano, TTL must stay within 0.5-${maxTtl}h, and total expected cost must stay at or below ${MAX_TOTAL_EXPECTED_COST.toFixed(3)}.`,
             llmReasoning: decision.reasoning,
             config: {
-              instanceType,
+              instanceType: instanceType as 't3.micro' | 't4g.nano',
               ttlHours,
               region,
             },
@@ -196,12 +256,23 @@ export class SandboxEnvService {
             guardrailsTriggered: true,
           };
 
-      // Log AI reasoning with latency
+      const policyOverride = policyCompliant && decision.decision === 'REJECT';
       await this.actionLogRepo.create({
         envId: env.id,
         agentReasoning: finalDecision.reasoning,
         toolCalled: 'log_reasoning',
-        output: JSON.stringify({ ...finalDecision, fallbackUsed }),
+        output: JSON.stringify({
+          ...finalDecision,
+          fallbackUsed,
+          // Observability fields for hallucination rate monitoring
+          policyOverride,
+          llmRawDecision: decision.decision,
+          llmRawReasoning: decision.reasoning,
+          // Include intent extraction log if this was a prompt-only request
+          ...(intentExtractionLog
+            ? { intentExtraction: intentExtractionLog }
+            : {}),
+        }),
         durationMs,
       });
 
@@ -210,21 +281,17 @@ export class SandboxEnvService {
         return { ...env, status: 'FAILED', decision: finalDecision };
       }
 
-      // Provision EC2 instance
       const instanceId = await this.ec2Service.runInstance(instanceType);
 
-      // Tag the resource
       await this.ec2Service.createTags(instanceId, {
         Project: 'EphOps',
         EnvId: env.id,
       });
 
-      // Update to RUNNING
       const updated = await this.repo.updateStatus(env.id, 'RUNNING', {
         resourceId: instanceId,
       });
 
-      // Log provisioning
       await this.actionLogRepo.create({
         envId: env.id,
         agentReasoning: `Provisioned ${instanceType} with TTL ${ttlHours}h`,

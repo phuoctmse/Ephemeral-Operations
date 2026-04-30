@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { provisionEnvironment } from '../lib/api'
 import { ApiError } from '../lib/ApiError'
 import Button from './Button'
@@ -10,12 +10,35 @@ interface ProvisionModalProps {
   onSuccess: () => void
 }
 
+const PROGRESS_STEPS = [
+  { after: 0,  label: 'Analyzing your request with LLM…' },
+  { after: 8,  label: 'Running FinOps guardrails check…' },
+  { after: 20, label: 'Provisioning EC2 instance…' },
+  { after: 35, label: 'Almost there, waiting for instance to start…' },
+]
+
 export default function ProvisionModal({ open, onClose, onSuccess }: ProvisionModalProps) {
   const [prompt, setPrompt] = useState('')
   const [instanceType, setInstanceType] = useState<'t3.micro' | 't4g.nano' | ''>('')
   const [ttlHours, setTtlHours] = useState<number | ''>('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progressLabel, setProgressLabel] = useState(PROGRESS_STEPS[0].label)
+
+  // Cycle through progress hints while the request is in-flight so the user
+  // knows the app is working and not frozen.
+  useEffect(() => {
+    if (!submitting) {
+      setProgressLabel(PROGRESS_STEPS[0].label)
+      return
+    }
+
+    const timers = PROGRESS_STEPS.slice(1).map(({ after, label }) =>
+      setTimeout(() => setProgressLabel(label), after * 1000),
+    )
+
+    return () => timers.forEach(clearTimeout)
+  }, [submitting])
 
   if (!open) return null
 
@@ -80,12 +103,15 @@ export default function ProvisionModal({ open, onClose, onSuccess }: ProvisionMo
             />
           </div>
           {error && <p className="text-ephops-state-failed text-sm">{error}</p>}
+          {submitting && (
+            <p className="text-ephops-text-secondary text-xs animate-pulse">{progressLabel}</p>
+          )}
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="ghost" type="button" onClick={onClose} disabled={submitting}>
               Cancel
             </Button>
             <Button variant="primary" type="submit" disabled={submitting}>
-              {submitting ? 'Provisioning...' : 'Provision'}
+              {submitting ? 'Provisioning…' : 'Provision'}
             </Button>
           </div>
         </form>

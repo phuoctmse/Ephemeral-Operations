@@ -6,7 +6,10 @@ import { AwsEc2Service } from '../aws-ec2/aws-ec2.service';
 import { OllamaService } from '../llm/ollama.service';
 import { GuardrailsService } from '../guardrails/guardrails.service';
 import { ActionLogRepository } from '../action-log/action-log.repository';
-import { UnauthorizedInstanceTypeError } from '../common/exceptions/finops.exceptions';
+import {
+  UnauthorizedInstanceTypeError,
+  UnrecognizedInstanceTypeError,
+} from '../common/exceptions/finops.exceptions';
 import { PricingService } from '../pricing/pricing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import appConfig from '../common/config/app.config';
@@ -62,10 +65,11 @@ describe('SandboxEnvService', () => {
       terminateInstance: jest.fn(),
       createTags: jest.fn(),
     };
-    mockLlm = { analyzePrompt: jest.fn() };
+    mockLlm = { analyzePrompt: jest.fn(), extractIntent: jest.fn() };
     mockGuardrails = {
       validateInstanceType: jest.fn(),
       validateConcurrency: jest.fn(),
+      validateIntent: jest.fn(),
     };
     mockActionLogRepo = { create: jest.fn() };
     mockPricing = { getHourlyCost: jest.fn() };
@@ -120,8 +124,23 @@ describe('SandboxEnvService', () => {
   describe('provision', () => {
     const baseDto = { prompt: 'I need a test server' };
 
+    // Default extractIntent mock for tests that use structured instanceType or baseDto
+    // without caring about intent extraction
+    const defaultIntentResult = {
+      intent: {
+        instanceType: 't3.micro' as const,
+        ttlHours: 1,
+        confidence: 'high' as const,
+        rawRequest: 'test server for 1 hour',
+      },
+      durationMs: 200,
+      fallbackUsed: false,
+    };
+
     it('should create a sandbox environment end-to-end', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+      mockGuardrails.validateIntent.mockReturnValue(undefined);
+      mockLlm.extractIntent.mockResolvedValue(defaultIntentResult);
       mockPricing.getHourlyCost.mockResolvedValue(0.0104);
       mockLlm.analyzePrompt.mockResolvedValue(approveResult);
       mockEc2.runInstance.mockResolvedValue('i-0abc123');
@@ -175,6 +194,7 @@ describe('SandboxEnvService', () => {
 
     it('should override a policy-compliant LLM reject and still provision', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+      mockGuardrails.validateIntent.mockReturnValue(undefined);
       mockPricing.getHourlyCost.mockResolvedValue(0.0104);
       mockLlm.analyzePrompt.mockResolvedValue(rejectResult);
       mockEc2.runInstance.mockResolvedValue('i-0abc123');
@@ -209,6 +229,8 @@ describe('SandboxEnvService', () => {
 
     it('should rollback on EC2 failure', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+      mockGuardrails.validateIntent.mockReturnValue(undefined);
+      mockLlm.extractIntent.mockResolvedValue(defaultIntentResult);
       mockPricing.getHourlyCost.mockResolvedValue(0.0104);
       mockLlm.analyzePrompt.mockResolvedValue(approveResult);
       mockEc2.runInstance.mockRejectedValue(new Error('EC2 unavailable'));
@@ -224,6 +246,8 @@ describe('SandboxEnvService', () => {
 
     it('should log durationMs from LLM result', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+      mockGuardrails.validateIntent.mockReturnValue(undefined);
+      mockLlm.extractIntent.mockResolvedValue(defaultIntentResult);
       mockPricing.getHourlyCost.mockResolvedValue(0.0104);
       mockLlm.analyzePrompt.mockResolvedValue({
         ...approveResult,
@@ -249,6 +273,8 @@ describe('SandboxEnvService', () => {
 
     it('should fallback to static pricing when pricing service fails', async () => {
       mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+      mockGuardrails.validateIntent.mockReturnValue(undefined);
+      mockLlm.extractIntent.mockResolvedValue(defaultIntentResult);
       mockPricing.getHourlyCost.mockRejectedValue(
         new Error('pricing unavailable'),
       );
@@ -263,6 +289,166 @@ describe('SandboxEnvService', () => {
 
       // Should not throw — falls back to PRICING_TABLE
       await expect(service.provision(baseDto)).resolves.toBeDefined();
+    });
+
+    // -------------------------------------------------------------------------
+    // Prompt-only path (Mode B): LLM intent extraction
+    // -------------------------------------------------------------------------
+    describe('prompt-only mode (no instanceType provided)', () => {
+      const validIntentResult = {
+        intent: {
+          instanceType: 't3.micro' as const,
+          ttlHours: 1,
+          confidence: 'high' as const,
+          rawRequest: 'Linux test server for 1 hour',
+        },
+        durationMs: 300,
+        fallbackUsed: false,
+      };
+
+      it('should extract intent from prompt and provision when valid', async () => {
+        mockLlm.extractIntent.mockResolvedValue(validIntentResult);
+        mockGuardrails.validateIntent.mockReturnValue(undefined);
+        mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+        mockPricing.getHourlyCost.mockResolvedValue(0.0104);
+        mockLlm.analyzePrompt.mockResolvedValue(approveResult);
+        mockEc2.runInstance.mockResolvedValue('i-0abc123');
+        mockEc2.createTags.mockResolvedValue(undefined);
+        mockRepo.updateStatus.mockResolvedValue({
+          id: 'env-1',
+          status: 'RUNNING',
+          resourceId: 'i-0abc123',
+        });
+        mockActionLogRepo.create.mockResolvedValue({});
+
+        // No instanceType in DTO — triggers Mode B
+        await service.provision({
+          prompt: 'I need a Linux test server for 1 hour',
+        });
+
+        expect(mockLlm.extractIntent).toHaveBeenCalledWith(
+          'I need a Linux test server for 1 hour',
+        );
+        expect(mockGuardrails.validateIntent).toHaveBeenCalledWith(
+          validIntentResult.intent,
+        );
+        expect(mockEc2.runInstance).toHaveBeenCalledWith('t3.micro');
+      });
+
+      it('should reject when LLM returns null instanceType (e.g. "nvidia rtx5900")', async () => {
+        const unrecognizedIntentResult = {
+          intent: {
+            instanceType: null,
+            ttlHours: 1,
+            confidence: 'low' as const,
+            rawRequest: 'nvidia rtx5900 GPU server',
+          },
+          durationMs: 250,
+          fallbackUsed: false,
+        };
+
+        mockLlm.extractIntent.mockResolvedValue(unrecognizedIntentResult);
+        mockGuardrails.validateIntent.mockImplementation(() => {
+          throw new UnrecognizedInstanceTypeError('nvidia rtx5900 GPU server');
+        });
+        mockRepo.create.mockResolvedValue({
+          id: 'env-blocked',
+          prompt: 'I want a nvidia rtx5900',
+          instanceType: 'unknown',
+          status: 'CREATING',
+          hourlyCost: 0,
+          createdAt: new Date(),
+          expiresAt: new Date(),
+        });
+        mockRepo.updateToFailed.mockResolvedValue({});
+        mockActionLogRepo.create.mockResolvedValue({});
+
+        await expect(
+          service.provision({ prompt: 'I want a nvidia rtx5900' }),
+        ).rejects.toThrow(BadRequestException);
+
+        expect(mockLlm.extractIntent).toHaveBeenCalled();
+        expect(mockGuardrails.validateIntent).toHaveBeenCalled();
+        // Should never reach EC2
+        expect(mockEc2.runInstance).not.toHaveBeenCalled();
+        expect(mockActionLogRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            toolCalled: 'guardrails_intent_block',
+          }),
+        );
+      });
+
+      it('should reject when LLM returns null ttlHours', async () => {
+        const noTtlIntentResult = {
+          intent: {
+            instanceType: 't3.micro' as const,
+            ttlHours: null,
+            confidence: 'low' as const,
+            rawRequest: 't3.micro with unspecified duration',
+          },
+          durationMs: 200,
+          fallbackUsed: false,
+        };
+
+        mockLlm.extractIntent.mockResolvedValue(noTtlIntentResult);
+        mockGuardrails.validateIntent.mockImplementation(() => {
+          throw new Error(
+            'Could not determine TTL from request. Please specify a duration.',
+          );
+        });
+        mockRepo.create.mockResolvedValue({
+          id: 'env-blocked',
+          prompt: 'Give me a t3.micro',
+          instanceType: 't3.micro',
+          status: 'CREATING',
+          hourlyCost: 0,
+          createdAt: new Date(),
+          expiresAt: new Date(),
+        });
+        mockRepo.updateToFailed.mockResolvedValue({});
+        mockActionLogRepo.create.mockResolvedValue({});
+
+        await expect(
+          service.provision({ prompt: 'Give me a t3.micro' }),
+        ).rejects.toThrow(BadRequestException);
+
+        expect(mockEc2.runInstance).not.toHaveBeenCalled();
+      });
+
+      it('should include intentExtraction in action log output', async () => {
+        mockLlm.extractIntent.mockResolvedValue(validIntentResult);
+        mockGuardrails.validateIntent.mockReturnValue(undefined);
+        mockGuardrails.validateInstanceType.mockReturnValue(undefined);
+        mockPricing.getHourlyCost.mockResolvedValue(0.0104);
+        mockLlm.analyzePrompt.mockResolvedValue(approveResult);
+        mockEc2.runInstance.mockResolvedValue('i-0abc123');
+        mockEc2.createTags.mockResolvedValue(undefined);
+        mockRepo.updateStatus.mockResolvedValue({
+          id: 'env-1',
+          status: 'RUNNING',
+        });
+        mockActionLogRepo.create.mockResolvedValue({});
+
+        await service.provision({
+          prompt: 'I need a Linux test server for 1 hour',
+        });
+
+        const logReasoningCall = (
+          mockActionLogRepo.create.mock.calls as Array<
+            [Record<string, unknown>]
+          >
+        ).find(([args]) => args['toolCalled'] === 'log_reasoning');
+        expect(logReasoningCall).toBeDefined();
+        const output = JSON.parse(
+          logReasoningCall![0]['output'] as string,
+        ) as Record<string, unknown>;
+        expect(output['intentExtraction']).toBeDefined();
+        expect(
+          (output['intentExtraction'] as Record<string, unknown>)[
+            'instanceType'
+          ],
+        ).toBe('t3.micro');
+      });
     });
   });
 

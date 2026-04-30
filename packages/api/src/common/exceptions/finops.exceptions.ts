@@ -1,5 +1,23 @@
 import { NotFoundException } from '@nestjs/common';
 
+export class UnrecognizedInstanceTypeError extends Error {
+  constructor(rawRequest: string) {
+    super(
+      `Could not map request to a known instance type: "${rawRequest}". Only t3.micro and t4g.nano are supported.`,
+    );
+    this.name = 'UnrecognizedInstanceTypeError';
+  }
+}
+
+export class UnresolvableTtlError extends Error {
+  constructor() {
+    super(
+      'Could not determine TTL from request. Please specify a duration (e.g. "for 1 hour").',
+    );
+    this.name = 'UnresolvableTtlError';
+  }
+}
+
 export class UnauthorizedInstanceTypeError extends Error {
   constructor(instanceType: string) {
     super(

@@ -4,9 +4,12 @@ import { SandboxEnvRepository } from '../sandbox-env/sandbox-env.repository';
 import { ALLOWED_INSTANCE_TYPES } from '../common/constants/finops.constants';
 import {
   UnauthorizedInstanceTypeError,
+  UnrecognizedInstanceTypeError,
+  UnresolvableTtlError,
   ConcurrencyLimitError,
   TtlExceededError,
 } from '../common/exceptions/finops.exceptions';
+import { type ExtractedIntent } from '../common/schemas/extracted-intent.schema';
 import appConfig from '../common/config/app.config';
 
 @Injectable()
@@ -31,6 +34,20 @@ export class GuardrailsService {
     ) {
       throw new UnauthorizedInstanceTypeError(instanceType);
     }
+  }
+
+  validateIntent(intent: ExtractedIntent): void {
+    if (intent.instanceType === null) {
+      throw new UnrecognizedInstanceTypeError(intent.rawRequest);
+    }
+
+    if (intent.ttlHours === null) {
+      throw new UnresolvableTtlError();
+    }
+
+    // Re-use existing hard checks on the resolved values
+    this.validateInstanceType(intent.instanceType);
+    this.enforceTtl(intent.ttlHours);
   }
 
   async validateConcurrency(): Promise<void> {

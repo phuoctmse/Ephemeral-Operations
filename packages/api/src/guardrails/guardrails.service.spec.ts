@@ -3,9 +3,12 @@ import { GuardrailsService } from './guardrails.service';
 import { SandboxEnvRepository } from '../sandbox-env/sandbox-env.repository';
 import {
   UnauthorizedInstanceTypeError,
+  UnrecognizedInstanceTypeError,
+  UnresolvableTtlError,
   ConcurrencyLimitError,
   TtlExceededError,
 } from '../common/exceptions/finops.exceptions';
+import { type ExtractedIntent } from '../common/schemas/extracted-intent.schema';
 import appConfig from '../common/config/app.config';
 
 describe('GuardrailsService', () => {
@@ -102,6 +105,73 @@ describe('GuardrailsService', () => {
 
     it('should cap TTL to max when exceeding', () => {
       expect(service.overrideTtl(5)).toBe(2);
+    });
+  });
+
+  describe('validateIntent', () => {
+    const validIntent: ExtractedIntent = {
+      instanceType: 't3.micro',
+      ttlHours: 1,
+      confidence: 'high',
+      rawRequest: 'Linux test server for 1 hour',
+    };
+
+    it('should pass for a valid intent', () => {
+      expect(() => service.validateIntent(validIntent)).not.toThrow();
+    });
+
+    it('should throw UnrecognizedInstanceTypeError when instanceType is null', () => {
+      const intent: ExtractedIntent = {
+        ...validIntent,
+        instanceType: null,
+        rawRequest: 'nvidia rtx5900 GPU server',
+      };
+      expect(() => service.validateIntent(intent)).toThrow(
+        UnrecognizedInstanceTypeError,
+      );
+      expect(() => service.validateIntent(intent)).toThrow(
+        'nvidia rtx5900 GPU server',
+      );
+    });
+
+    it('should throw UnresolvableTtlError when ttlHours is null', () => {
+      const intent: ExtractedIntent = {
+        ...validIntent,
+        ttlHours: null,
+      };
+      expect(() => service.validateIntent(intent)).toThrow(
+        UnresolvableTtlError,
+      );
+    });
+
+    it('should throw UnauthorizedInstanceTypeError for disallowed type via validateInstanceType', () => {
+      // This path is hit if LLM somehow returns a non-null but disallowed type
+      // (schema constrains to t3.micro|t4g.nano|null, so this is a safety net)
+      const intent = {
+        ...validIntent,
+        instanceType: 'm5.large' as unknown as 't3.micro',
+      };
+      expect(() => service.validateIntent(intent)).toThrow(
+        UnauthorizedInstanceTypeError,
+      );
+    });
+
+    it('should throw TtlExceededError when ttlHours exceeds max', () => {
+      const intent: ExtractedIntent = {
+        ...validIntent,
+        ttlHours: 10,
+      };
+      expect(() => service.validateIntent(intent)).toThrow(TtlExceededError);
+    });
+
+    it('should pass for t4g.nano with valid TTL', () => {
+      const intent: ExtractedIntent = {
+        instanceType: 't4g.nano',
+        ttlHours: 0.5,
+        confidence: 'high',
+        rawRequest: 'nano instance for 30 minutes',
+      };
+      expect(() => service.validateIntent(intent)).not.toThrow();
     });
   });
 });
